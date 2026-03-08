@@ -1,0 +1,1498 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>절세 3총사 관리 대시보드</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Babel CDN (브라우저에서 JSX 컴파일) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    /* 스크롤바 숨김 유틸리티 클래스 (Tailwind 기본 미포함 기능 보완) */
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+    body {
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <!-- React 앱 코드 (Babel 모듈 사용) -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useRef, useMemo } from "https://esm.sh/react@18.2.0";
+    import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
+    import {
+      TrendingUp, Calendar, AlertTriangle, CheckCircle2, DollarSign,
+      LayoutDashboard, List, Plus, Trash2, RefreshCw, Wallet, Calculator,
+      Info, ChevronDown, X, Settings, Download, Upload, PieChart, Coins,
+      Archive, ShieldCheck, BarChart3, User, ArrowUp, ArrowDown
+    } from "https://esm.sh/lucide-react@0.292.0";
+
+    const fmt = (n) => {
+      const num = Number(n);
+      return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
+    };
+
+    const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
+
+    const PENSION1_DEFAULT_TARGET = [
+      { name: "S&P500", value: 24, color: "#3b82f6" }, { name: "나스닥", value: 9, color: "#14b8a6" },
+      { name: "CSI300", value: 13, color: "#ef4444" }, { name: "한국200", value: 8, color: "#6366f1" },
+      { name: "미국채", value: 12, color: "#8b5cf6" }, { name: "국고채", value: 12, color: "#10b981" },
+      { name: "금", value: 22, color: "#f59e0b" },
+    ];
+
+    function Tip({ text }) {
+      const [show, setShow] = useState(false);
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!show) return;
+        const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
+        document.addEventListener("mousedown", handler);
+        document.addEventListener("touchstart", handler);
+        return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler); };
+      }, [show]);
+
+      return (
+        <div className="relative inline-flex items-center" ref={ref}>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setShow(s => !s); }}
+            className="w-[18px] h-[18px] rounded-full bg-slate-200 text-slate-500 text-[10px] font-black flex items-center justify-center hover:bg-indigo-100 hover:text-indigo-600 transition-colors flex-shrink-0 leading-none"
+          >?</button>
+          {show && (
+            <div className="absolute left-0 top-6 z-[60] w-60 bg-slate-900 text-white text-[11px] font-medium leading-relaxed rounded-2xl p-3.5 shadow-2xl border border-slate-700 whitespace-pre-wrap">
+              <div className="absolute -top-1.5 left-3.5 w-3 h-3 bg-slate-900 rotate-45 border-l border-t border-slate-700" />
+              {text}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function DonutChart({ data, title, subtitle, centerLabel = "총 비중" }) {
+      let cum = 0;
+      const rawTotal = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
+      const normalizeFactor = rawTotal > 0 ? 100 / rawTotal : 1;
+
+      return (
+        <div className="flex flex-col items-center bg-white p-5 rounded-2xl border border-slate-200 shadow-sm w-full">
+          <p className="text-sm font-bold text-slate-800">{title}</p>
+          <p className="text-xs text-slate-400 mt-0.5 mb-4">{subtitle}</p>
+          <div className="relative w-40 h-40 sm:w-48 sm:h-48">
+            <svg viewBox="0 0 40 40" className="-rotate-90 w-full h-full">
+              {data.map((s, i) => {
+                const rawVal = Number(s.value) || 0;
+                const val = rawVal * normalizeFactor; 
+                const da = `${val} ${100 - val}`;
+                const offset = 100 - cum;
+                cum += val;
+                return (
+                  <circle key={i} cx="20" cy="20" r="15.92" fill="transparent"
+                    stroke={s.color} strokeWidth="5.5"
+                    strokeDasharray={da} strokeDashoffset={offset}
+                    className="transition-all duration-500 ease-in-out" />
+                );
+              })}
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-[10px] text-slate-400 font-semibold">{centerLabel}</span>
+              <span className="text-xl font-black text-slate-800">{Math.round(rawTotal)}%</span>
+            </div>
+          </div>
+          <div className="mt-4 w-full flex flex-wrap justify-center gap-1.5">
+            {data.map((s, i) => (
+              <span key={i} className="flex items-center text-[11px] bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-full font-semibold text-slate-700">
+                <span className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: s.color }}></span>
+                {s.name} <span className="ml-1 font-bold text-slate-500">{s.value}%</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    function ReturnBadge({ amount, rate, size = "sm" }) {
+      const pos = amount > 0, neg = amount < 0;
+      const color = pos ? "text-rose-500" : neg ? "text-blue-500" : "text-slate-400";
+      return (
+        <div className={`text-right ${size === "lg" ? "text-base" : "text-xs"}`}>
+          <span className={`font-black ${color}`}>{pos ? "+" : ""}{fmt(amount)}원</span>
+          <span className={`ml-1 font-bold opacity-80 ${color}`}>({pos ? "▲" : neg ? "▼" : ""}{Math.abs(rate || 0).toFixed(2)}%)</span>
+        </div>
+      );
+    }
+
+    function AssetCategorySelector({ asset, curAcc, updateAcc, chAsset, showMsg, inpBase }) {
+      const ASSET_PRESETS = [
+        { label: "국내주식", color: "#6366f1" }, { label: "미국주식", color: "#3b82f6" },
+        { label: "선진국주식", color: "#0ea5e9" }, { label: "중국주식", color: "#ef4444" },
+        { label: "신흥국주식", color: "#f97316" }, { label: "미국채권", color: "#8b5cf6" },
+        { label: "국내채권", color: "#10b981" }, { label: "글로벌채권", color: "#14b8a6" },
+        { label: "금", color: "#f59e0b" }, { label: "원자재", color: "#d97706" },
+        { label: "리츠(부동산)", color: "#ec4899" }, { label: "현금/단기채", color: "#94a3b8" },
+        { label: "직접입력", color: "#64748b" },
+      ];
+      const [showPreset, setShowPreset] = useState(false);
+      const [customMode, setCustomMode] = useState(false);
+
+      const handleSelect = (preset) => {
+        if (preset.label === "직접입력") { setCustomMode(true); setShowPreset(false); return; }
+        chAsset(asset.id, "category", preset.label);
+        setShowPreset(false); setCustomMode(false);
+        
+        const isExist = curAcc.targetPortfolio.some(t => t.name.trim().toLowerCase() === preset.label.toLowerCase());
+        if (!isExist) {
+          updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: preset.label, value: 0, color: preset.color }] });
+          showMsg("success", `"${preset.label}" 자산군이 목표 비중에 자동 등록되었습니다.`);
+        }
+      };
+
+      if (customMode) {
+        return (
+          <div className="space-y-1">
+            <input type="text" value={asset.category || ""} autoFocus
+              onChange={e => chAsset(asset.id, "category", e.target.value)}
+              onBlur={e => {
+                const val = e.target.value.trim();
+                if (val) {
+                  chAsset(asset.id, "category", val);
+                  const isExist = curAcc.targetPortfolio.some(t => t.name.trim().toLowerCase() === val.toLowerCase());
+                  if (!isExist) {
+                    updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: val, value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] });
+                    showMsg("success", `"${val}" 자산군이 등록되었습니다.`);
+                  }
+                }
+                setCustomMode(false);
+              }}
+              placeholder="자산군명 직접 입력" className={inpBase} />
+            <button onClick={() => setCustomMode(false)} className="text-[10px] text-slate-400 font-bold underline pl-1 hover:text-slate-600 transition-colors">← 목록에서 선택</button>
+          </div>
+        );
+      }
+
+      return (
+        <div className="relative">
+          <button type="button" onClick={() => setShowPreset(!showPreset)} className={`${inpBase} text-left flex justify-between items-center ${!asset.category ? 'text-slate-400' : 'text-slate-800'}`}>
+            <span className="truncate mr-2">{asset.category || "자산군 선택"}</span>
+            <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-200 ${showPreset ? 'rotate-180 text-slate-700' : 'text-slate-400'}`}/>
+          </button>
+          {showPreset && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 overflow-hidden">
+              <div className="p-1.5 flex flex-col max-h-72 overflow-y-auto scrollbar-hide">
+                {ASSET_PRESETS.map(preset => (
+                  <button key={preset.label} type="button" onClick={() => handleSelect(preset)}
+                    className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-bold text-left transition-all hover:bg-slate-50 ${preset.label === "직접입력" ? "text-slate-400 border-t border-slate-100 mt-1 pt-3 justify-center" : asset.category === preset.label ? "bg-slate-50 text-slate-900" : "text-slate-700"}`}>
+                    {preset.label !== "직접입력" && <span className="w-3 h-3 rounded-full flex-shrink-0 shadow-sm" style={{ background: preset.color }}></span>}
+                    <span className="flex-1">{preset.label}</span>
+                    {asset.category === preset.label && preset.label !== "직접입력" && <span className="text-emerald-500 text-xs font-black">✓ 선택됨</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function App() {
+      const [isLoaded, setIsLoaded] = useState(false);
+      const [activeAccount, setActiveAccount] = useState("pension1");
+      const [activeTab, setActiveTab] = useState("dashboard");
+      const [dDay, setDDay] = useState(0);
+      const [global, setGlobal] = useState({ userName: "김투자", incomeLevel: "5500이하" });
+      const [confirmReset, setConfirmReset] = useState(false);
+
+      const [accounts, setAccounts] = useState({
+        pension1: {
+          limit: 6000000, color: "#6366f1", label: "연금저축1 (세액공제)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 500000, targetPortfolio: PENSION1_DEFAULT_TARGET,
+          assets: [
+            { id: 1, category: "S&P500",  name: "TIGER 미국S&P500",    code: "360750", quantity: 120, price: 14200, currentPrice: 15100, assetType: "위험자산" },
+            { id: 2, category: "나스닥",  name: "KODEX 미국나스닥100",  code: "379810", quantity: 45,  price: 18500, currentPrice: 19800, assetType: "위험자산" },
+            { id: 3, category: "CSI300",  name: "KODEX 차이나CSI300",   code: "283580", quantity: 90,  price: 8200,  currentPrice: 7800,  assetType: "위험자산" },
+            { id: 4, category: "한국200", name: "TIGER 200",             code: "102110", quantity: 30,  price: 32000, currentPrice: 33500, assetType: "위험자산" },
+            { id: 5, category: "미국채",  name: "ACE 미국30년국채액티브",code: "449180", quantity: 200, price: 9500,  currentPrice: 9200,  assetType: "안전자산" },
+            { id: 6, category: "국고채",  name: "KODEX 국고채30년액티브",code: "152380", quantity: 20,  price: 51000, currentPrice: 50200, assetType: "안전자산" },
+            { id: 7, category: "금",      name: "TIGER KRX금현물",       code: "411060", quantity: 180, price: 12800, currentPrice: 13600, assetType: "안전자산" },
+          ],
+          contributions: [
+            { id: 1, month: "2026-01", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 2, month: "2026-02", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 3, month: "2026-03", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 4, month: "2026-02", amount: 18500,  type: "배당", memo: "S&P500 분배금" },
+          ],
+          pastContributions: [{ id: 1, year: 2024, amount: 6000000, dividend: 120000 }, { id: 2, year: 2025, amount: 6000000, dividend: 310000 }],
+        },
+        pension2: {
+          limit: 9000000, color: "#8b5cf6", label: "연금저축2 (초과납입)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 300000,
+          targetPortfolio: [{ name: "미국주식", value: 25, color: "#3b82f6" }, { name: "국내채권", value: 25, color: "#10b981" }, { name: "금", value: 25, color: "#f59e0b" }, { name: "현금/단기채", value: 25, color: "#94a3b8" }],
+          assets: [
+            { id: 1, category: "미국주식",   name: "TIGER 미국S&P500",        code: "360750", quantity: 60,  price: 14200, currentPrice: 15100, assetType: "위험자산" },
+            { id: 2, category: "국내채권",   name: "KODEX 국고채30년액티브",    code: "152380", quantity: 15,  price: 51000, currentPrice: 50200, assetType: "안전자산" },
+            { id: 3, category: "금",         name: "TIGER KRX금현물",           code: "411060", quantity: 90,  price: 12800, currentPrice: 13600, assetType: "안전자산" },
+            { id: 4, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 120, price: 10200, currentPrice: 10250, assetType: "안전자산" },
+          ],
+          contributions: [{ id: 1, month: "2026-01", amount: 300000, type: "입금", memo: "초과납입" }, { id: 2, month: "2026-02", amount: 300000, type: "입금", memo: "초과납입" }, { id: 3, month: "2026-03", amount: 300000, type: "입금", memo: "초과납입" }],
+          pastContributions: [{ id: 1, year: 2025, amount: 3600000, dividend: 85000 }],
+        },
+        irp: {
+          limit: 3000000, color: "#f59e0b", label: "IRP (퇴직연금)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 250000,
+          targetPortfolio: [{ name: "미국주식", value: 50, color: "#3b82f6" }, { name: "미국채권", value: 30, color: "#8b5cf6" }, { name: "현금/단기채", value: 20, color: "#94a3b8" }],
+          assets: [
+            { id: 1, category: "미국주식",   name: "TIGER 미국S&P500",        code: "360750", quantity: 80,  price: 14200, currentPrice: 15100, assetType: "위험자산" },
+            { id: 2, category: "미국채권",   name: "ACE 미국30년국채액티브",    code: "449180", quantity: 150, price: 9500,  currentPrice: 9200,  assetType: "안전자산" },
+            { id: 3, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 80,  price: 10200, currentPrice: 10250, assetType: "안전자산" },
+          ],
+          contributions: [{ id: 1, month: "2026-01", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 2, month: "2026-02", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 3, month: "2026-03", amount: 250000, type: "입금", memo: "IRP 납입" }],
+          pastContributions: [{ id: 1, year: 2024, amount: 3000000, dividend: 60000 }, { id: 2, year: 2025, amount: 3000000, dividend: 95000 }],
+        },
+        isa: {
+          limit: 20000000, color: "#10b981", label: "ISA (중개형)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 500000, isaType: "일반형(200만)", openDate: "2024-03-01", contractYears: 3,
+          targetPortfolio: [{ name: "미국주식", value: 25, color: "#3b82f6" }, { name: "미국채권", value: 25, color: "#8b5cf6" }, { name: "금", value: 25, color: "#f59e0b" }, { name: "현금/단기채", value: 25, color: "#94a3b8" }],
+          assets: [
+            { id: 1, category: "미국채권",   name: "TIGER 미국초단기(3개월이하)국채", code: "0046A0", quantity: 526, price: 9635,  currentPrice: 10215, assetType: "안전자산" },
+            { id: 2, category: "미국주식",   name: "KODEX 미국배당커버드콜액티브",    code: "441640", quantity: 713, price: 9000,  currentPrice: 13055, assetType: "위험자산" },
+            { id: 3, category: "금",         name: "TIGER KRX금현물",                 code: "411060", quantity: 200, price: 12000, currentPrice: 13600, assetType: "안전자산" },
+            { id: 4, category: "현금/단기채",name: "TIGER 단기채권액티브",             code: "157450", quantity: 300, price: 10150, currentPrice: 10250, assetType: "안전자산" },
+          ],
+          contributions: [{ id: 1, month: "2026-01", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 2, month: "2026-02", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 3, month: "2026-03", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 4, month: "2026-02", amount: 32000, type: "배당", memo: "커버드콜 분배금" }],
+          pastContributions: [{ id: 1, year: 2024, amount: 6000000, dividend: 180000 }, { id: 2, year: 2025, amount: 12000000, dividend: 520000 }],
+        },
+      });
+
+      const [msg, setMsg] = useState({ type: "", text: "" });
+      const msgTimerRef = useRef(null);
+      const [expandedAsset, setExpandedAsset] = useState(null);
+      const [expandedContrib, setExpandedContrib] = useState(null);
+      const [showRebalance, setShowRebalance] = useState(false);
+      const [pastOpen, setPastOpen] = useState(false);
+      const [isFetching, setIsFetching] = useState(false);
+      const [isFetchingAll, setIsFetchingAll] = useState(false);
+      const [fetchingId, setFetchingId] = useState(null);
+      const [fetchError, setFetchError] = useState("");
+      const currentYear = new Date().getFullYear();
+
+      useEffect(() => {
+        setExpandedAsset(null);
+        setExpandedContrib(null);
+        setPastOpen(false);
+      }, [activeAccount]);
+
+      const isInitialMountTab = useRef(true);
+      useEffect(() => {
+        if (isInitialMountTab.current) {
+          isInitialMountTab.current = false;
+          return;
+        }
+        setMsg({ type: "", text: "" });
+      }, [activeTab]);
+
+      useEffect(() => {
+        try {
+          const storedAccounts = localStorage.getItem("retireLab_accounts_v3");
+          const storedGlobal = localStorage.getItem("retireLab_global_v3");
+          if (storedAccounts && storedGlobal) { setAccounts(JSON.parse(storedAccounts)); setGlobal(JSON.parse(storedGlobal)); }
+        } catch (e) {}
+        setIsLoaded(true);
+      }, []);
+
+      useEffect(() => {
+        if (!isLoaded) return;
+        localStorage.setItem("retireLab_accounts_v3", JSON.stringify(accounts));
+        localStorage.setItem("retireLab_global_v3", JSON.stringify(global));
+      }, [accounts, global, isLoaded]);
+
+      useEffect(() => { return () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }; }, []);
+
+      const showMsg = (type, text) => {
+        setMsg({ type, text });
+        if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+        msgTimerRef.current = setTimeout(() => setMsg({ type: "", text: "" }), 4000);
+      };
+
+      const updateAcc = (fields) => setAccounts(prev => ({ ...prev, [activeAccount]: { ...prev[activeAccount], ...fields } }));
+      const curAcc = accounts[activeAccount] || accounts.pension1;
+      const [rebalanceYear] = useState(currentYear);
+
+      useEffect(() => {
+        if (activeAccount === "report") return;
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const lastDayOfMonth = new Date(rebalanceYear, curAcc.rebalanceMonth, 0).getDate();
+        const safeDay = Math.min(curAcc.rebalanceDay, lastDayOfMonth);
+        const target = new Date(rebalanceYear, curAcc.rebalanceMonth - 1, safeDay);
+        setDDay(Math.ceil((target - today) / 86400000));
+      }, [activeAccount, accounts, curAcc.rebalanceMonth, curAcc.rebalanceDay, rebalanceYear]);
+
+      const calcAccStats = (acc) => {
+        const totalCurrentValue = acc.assets.reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
+        const totalBookValue = acc.assets.reduce((s, a) => s + (a.quantity * a.price), 0);
+        const prevPrincipal = acc.pastContributions.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        const prevDividend = acc.pastContributions.reduce((s, p) => s + (Number(p.dividend) || 0), 0);
+        const activeCash = acc.contributions.filter(c => c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const activeDividend = acc.contributions.filter(c => c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const currentMonthStr = `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+        const thisMonthDividend = acc.contributions.filter(c => c.month === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const purePrincipal = prevPrincipal + activeCash;
+        const totalDividend = prevDividend + activeDividend;
+        const capitalGain = totalCurrentValue - (purePrincipal + totalDividend);
+        const bookReturnAmt = totalCurrentValue - totalBookValue;
+        const bookReturnRate = totalBookValue > 0 ? (bookReturnAmt / totalBookValue) * 100 : 0;
+        const principalReturnAmt = totalCurrentValue - purePrincipal;
+        const principalReturnRate = purePrincipal > 0 ? (principalReturnAmt / purePrincipal) * 100 : 0;
+        const pctP = totalCurrentValue > 0 ? (purePrincipal / totalCurrentValue) * 100 : 0;
+        const pctD = totalCurrentValue > 0 ? (totalDividend / totalCurrentValue) * 100 : 0;
+        const pctG = (totalCurrentValue > 0 && capitalGain > 0) ? (capitalGain / totalCurrentValue) * 100 : 0;
+        const yearCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const riskAssetValue = acc.assets.filter(a => a.assetType === "위험자산" || !a.assetType).reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
+        const riskRatio = totalCurrentValue > 0 ? (riskAssetValue / totalCurrentValue) * 100 : 0;
+        const accHasTarget = acc.targetPortfolio && acc.targetPortfolio.length > 0 && acc.targetPortfolio.some(t => t.value > 0);
+        const currentHoldingsChartData = [];
+        if (!accHasTarget && totalCurrentValue > 0) {
+          const grouped = acc.assets.reduce((grp, a) => {
+            const cat = a.category || a.name || '미분류';
+            if (!grp[cat]) grp[cat] = { name: cat, totalValue: 0, color: '#94a3b8' };
+            grp[cat].totalValue += (a.quantity * (a.currentPrice || a.price));
+            const tColor = (acc.targetPortfolio.find(t => t.name === cat) || {}).color;
+            if (tColor) grp[cat].color = tColor;
+            return grp;
+          }, {});
+          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / totalCurrentValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
+        }
+        return { totalCurrentValue, totalBookValue, purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, riskRatio, thisMonthDividend, currentHoldingsChartData };
+      };
+
+      const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
+      const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (stats.thisMonthDividend || 0);
+      const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
+
+      const reportStats = useMemo(() => {
+        const allKeys = ["pension1", "pension2", "irp", "isa"];
+        const statsMap = {};
+        
+        allKeys.forEach(key => {
+          statsMap[key] = calcAccStats(accounts[key]);
+        });
+
+        const summary = allKeys.reduce((acc, key) => {
+          const s = statsMap[key];
+          acc.totalValue += s.totalCurrentValue;
+          acc.totalPrincipal += s.purePrincipal;
+          acc.accountValues.push({ name: accounts[key].label.split(" ")[0], value: s.totalCurrentValue, color: accounts[key].color });
+          return acc;
+        }, { totalValue: 0, totalPrincipal: 0, accountValues: [] });
+        
+        const creditBase = statsMap.pension1.yearCash + statsMap.irp.yearCash;
+        summary.estimatedTaxRefund = Math.min(creditBase, 9000000) * (global.incomeLevel === "5500이하" ? 0.165 : 0.132);
+        return summary;
+      }, [accounts, global, currentYear]);
+
+      const buyLogic = useMemo(() => {
+        const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
+        const invalidTarget = activeAccount !== "report" && targetSum !== 100;
+
+        if (!activeHasTarget || invalidTarget) return { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: totalInvestableCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget };
+
+        const vt = stats.totalCurrentValue + totalInvestableCash; let cash = totalInvestableCash; const orders = [];
+        const currentPortfolio = curAcc.targetPortfolio.map(t => {
+          const cv = curAcc.assets.filter(a => a.category === t.name).reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
+          const w = stats.totalCurrentValue > 0 ? (cv / stats.totalCurrentValue) * 100 : 0;
+          return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: Number(t.value) || 0 };
+        });
+        
+        const fullRebalancePlan = currentPortfolio.map(p => {
+          const pa = curAcc.assets.find(a => a.category === p.name);
+          const cp = pa ? (pa.currentPrice || pa.price) : 0;
+          const ap = pa ? pa.price : 0;
+          const diff = stats.totalCurrentValue * (p.targetWeight / 100) - p.categoryValue;
+          const shares = cp > 0 ? Math.round(diff / cp) : 0;
+          const profit = shares < 0 ? Math.abs(shares) * (cp - ap) : 0;
+          return { name: p.name, assetName: pa ? pa.name : p.name, currentWeight: p.value, targetWeight: p.targetWeight, shares, currentPrice: cp, profit };
+        }).filter(x => x.shares !== 0).sort((a, b) => a.shares - b.shares);
+        const totalSellAmt = fullRebalancePlan.filter(x => x.shares < 0).reduce((s, x) => s + Math.abs(x.shares * x.currentPrice), 0);
+        const fee = totalSellAmt * 0.002;
+        
+        currentPortfolio.filter(d => (vt * (d.targetWeight / 100) - d.categoryValue) > 0).sort((a, b) => (vt * (b.targetWeight / 100) - b.categoryValue) - (vt * (a.targetWeight / 100) - a.categoryValue))
+          .forEach(item => {
+            const pa = curAcc.assets.find(a => a.category === item.name); const cp = pa ? (pa.currentPrice || pa.price) : 0;
+            const deficit = vt * (item.targetWeight / 100) - item.categoryValue;
+            if (cash >= cp && cp > 0) { const n = Math.min(Math.floor(cash / cp), Math.ceil(deficit / cp)); if (n > 0) { orders.push({ name: item.name, assetName: pa ? pa.name : item.name, shares: n, cost: n * cp, deficit }); cash -= n * cp; } }
+          });
+
+        let keepBuying = true;
+        while (keepBuying && cash > 0) {
+          keepBuying = false;
+          const remainingDeficits = currentPortfolio.map(item => {
+            const pa = curAcc.assets.find(a => a.category === item.name);
+            const cp = pa ? (pa.currentPrice || pa.price) : 0;
+            const order = orders.find(o => o.name === item.name);
+            const orderCost = order ? order.cost : 0;
+            const currentDeficit = (vt * (item.targetWeight / 100)) - (item.categoryValue + orderCost);
+            return { name: item.name, assetName: pa ? pa.name : item.name, cp, currentDeficit };
+          }).filter(x => x.currentDeficit > 0 && cash >= x.cp && x.cp > 0).sort((a, b) => b.currentDeficit - a.currentDeficit);
+
+          if (remainingDeficits.length > 0) {
+            const target = remainingDeficits[0];
+            const orderIndex = orders.findIndex(o => o.name === target.name);
+            if (orderIndex >= 0) {
+              orders[orderIndex] = {
+                ...orders[orderIndex],
+                shares: orders[orderIndex].shares + 1,
+                cost: orders[orderIndex].cost + target.cp,
+                deficit: Math.max(0, target.currentDeficit - target.cp)
+              };
+            } else {
+              orders.push({
+                name: target.name,
+                assetName: target.assetName,
+                shares: 1,
+                cost: target.cp,
+                deficit: Math.max(0, target.currentDeficit - target.cp)
+              });
+            }
+            cash -= target.cp;
+            keepBuying = true;
+          }
+        }
+
+        const tempDeviation = currentPortfolio.map(p => {
+          const gap = p.value - p.targetWeight;
+          const deficitAmount = (stats.totalCurrentValue * (p.targetWeight / 100)) - p.categoryValue;
+          return { name: p.name, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
+        });
+
+        tempDeviation.sort((a, b) => b.deficitAmount - a.deficitAmount);
+
+        let priorityCounter = 1;
+        const deviationData = tempDeviation.map(d => {
+          let priority = null;
+          if (d.deficitAmount > 0) priority = priorityCounter++;
+          return { ...d, priority };
+        });
+
+        return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: fullRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget };
+      }, [activeHasTarget, curAcc, stats.totalCurrentValue, totalInvestableCash, activeAccount]);
+
+      const chAsset = (id, f, v) => updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v } : a) });
+      const chContrib = (id, f, v) => updateAcc({ contributions: curAcc.contributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
+      const chPast = (id, f, v) => updateAcc({ pastContributions: curAcc.pastContributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
+
+      const moveAsset = (index, direction) => {
+        if ((direction === -1 && index === 0) || (direction === 1 && index === curAcc.assets.length - 1)) return;
+        const newAssets = [...curAcc.assets];
+        const temp = newAssets[index];
+        newAssets[index] = newAssets[index + direction];
+        newAssets[index + direction] = temp;
+        updateAcc({ assets: newAssets });
+      };
+
+      const fetchStock = async (code) => {
+        const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
+        for (const proxy of [`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`]) {
+          try {
+            const res = await fetch(proxy); if (!res.ok) continue; const d = await res.json();
+            const actual = proxy.includes("allorigins") && d.contents ? JSON.parse(d.contents) : d;
+            const priceStr = actual.closePrice || (actual.result && actual.result.closePrice);
+            const nameStr = actual.stockName || (actual.result && actual.result.stockName);
+            if (priceStr || nameStr) return { price: priceStr ? Number(priceStr.replace(/,/g, "")) : null, name: nameStr || "" };
+          } catch (e) {}
+        }
+        return null;
+      };
+
+      const onCodeBlur = async (id, code) => {
+        if (!code || code.trim().length < 5) return;
+        const accountAtStart = activeAccount;
+        
+        setFetchingId(id); 
+        const d = await fetchStock(code.trim());
+        
+        if (accountAtStart !== activeAccount) {
+          setFetchingId(null);
+          return;
+        }
+
+        if (d) {
+          setAccounts(prev => ({ 
+            ...prev, 
+            [accountAtStart]: { 
+              ...prev[accountAtStart], 
+              assets: prev[accountAtStart].assets.map(a => a.id === id ? { ...a, name: d.name || a.name, currentPrice: d.price || a.currentPrice } : a) 
+            } 
+          }));
+          showMsg("success", `"${d.name || code}" 현재가를 불러왔습니다.`);
+        } else {
+          showMsg("error", `종목코드 ${code.trim()} 조회에 실패했습니다.`);
+        }
+        
+        setFetchingId(null);
+      };
+
+      const fetchAllPrices = async () => {
+        if (isFetching) return;
+        
+        setIsFetching(true); setFetchError(""); let err = false;
+        const currentAccount = activeAccount;
+        const currentAssets = accounts[currentAccount].assets;
+
+        const updates = await Promise.all(currentAssets.map(async a => {
+          if (a.code && a.code.length >= 5) { 
+            const d = await fetchStock(a.code); 
+            if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name }; 
+            err = true; 
+          }
+          return null;
+        }));
+
+        setAccounts(prev => {
+          if (!prev[currentAccount]) return prev;
+          return {
+            ...prev,
+            [currentAccount]: {
+              ...prev[currentAccount],
+              assets: prev[currentAccount].assets.map(prevAsset => {
+                const update = updates.find(u => u && u.id === prevAsset.id);
+                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+              })
+            }
+          };
+        });
+
+        setIsFetching(false);
+        if (err) { setFetchError("일부 종목 조회 실패"); setTimeout(() => setFetchError(""), 3000); }
+      };
+
+      const fetchAllAccountsPrices = async () => {
+        if (isFetchingAll) return;
+
+        setIsFetchingAll(true);
+        let hasErr = false;
+        const accountUpdates = {};
+        
+        for (const accKey of Object.keys(accounts)) {
+          if (accKey === "report") continue;
+          const acc = accounts[accKey];
+          const updates = await Promise.all(acc.assets.map(async a => {
+            if (a.code && a.code.length >= 5) {
+              const d = await fetchStock(a.code);
+              if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
+              hasErr = true;
+            }
+            return null;
+          }));
+          accountUpdates[accKey] = updates;
+        }
+        
+        setAccounts(prev => {
+          const nextAccounts = { ...prev };
+          for (const accKey of Object.keys(accountUpdates)) {
+            if (!nextAccounts[accKey]) continue;
+            const updates = accountUpdates[accKey];
+            nextAccounts[accKey] = {
+              ...nextAccounts[accKey],
+              assets: nextAccounts[accKey].assets.map(prevAsset => {
+                const update = updates.find(u => u && u.id === prevAsset.id);
+                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+              })
+            };
+          }
+          return nextAccounts;
+        });
+
+        setIsFetchingAll(false);
+        if (hasErr) showMsg("error", "일부 계좌의 종목 갱신에 실패했습니다.");
+        else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+      };
+
+      const exportData = () => {
+        const payload = {
+          schemaVersion: "1.0",
+          exportedAt: new Date().toISOString(),
+          accounts,
+          global
+        };
+        const a = document.createElement("a");
+        a.href = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
+        a.download = `절세3총사_백업_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      };
+
+      const importData = (e) => {
+        const file = e.target.files[0]; if (!file) return; const r = new FileReader();
+        r.onload = (ev) => {
+          try { 
+            const d = JSON.parse(ev.target.result); 
+            if (d.accounts && typeof d.accounts === 'object' && d.global && typeof d.global === 'object' && d.schemaVersion) { 
+              setAccounts(d.accounts); 
+              setGlobal(d.global); 
+              showMsg("success", "통합 데이터 복구 완료!"); 
+            } else {
+              throw new Error("Invalid Schema");
+            }
+          } catch { 
+            showMsg("error", "올바른 구조의 백업 파일이 아닙니다."); 
+          }
+        };
+        r.readAsText(file); e.target.value = "";
+      };
+
+      const doSettle = () => {
+        const toSettle = curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) < currentYear);
+        
+        if (toSettle.length === 0) {
+          showMsg("error", "마감할 과거 연도 데이터가 없습니다.");
+          return;
+        }
+
+        const unSettled = toSettle.filter(c => {
+          const y = parseInt(c.month.split("-")[0], 10);
+          return !curAcc.pastContributions.some(p => p.year === y);
+        });
+
+        if (unSettled.length === 0) {
+          showMsg("error", "이미 모든 과거 연도 데이터가 마감되었습니다.");
+          return;
+        }
+
+        const yearsProcessed = new Set();
+        exportData();
+
+        const sums = {};
+        unSettled.forEach(c => {
+          const y = parseInt(c.month.split("-")[0], 10); 
+          yearsProcessed.add(y);
+          if (!sums[y]) sums[y] = { amount: 0, dividend: 0 };
+          if (c.type === "입금") sums[y].amount += Number(c.amount || 0); 
+          else if (c.type === "배당") sums[y].dividend += Number(c.amount || 0);
+        });
+
+        let np = curAcc.pastContributions.map(p => ({ ...p }));
+        Object.entries(sums).forEach(([y, v]) => {
+          const yn = parseInt(y, 10); 
+          np.push({ id: Date.now() + Math.random(), year: yn, ...v }); 
+        });
+
+        updateAcc({ 
+          pastContributions: np, 
+          contributions: curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) >= currentYear) 
+        });
+        
+        showMsg("success", `총 ${yearsProcessed.size}개 연도 데이터가 성공적으로 이월되었습니다.`);
+      };
+
+      if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">로딩 중...</div>;
+
+      const cardBase = "bg-white rounded-2xl border border-slate-200 shadow-sm";
+      const inpBase = "w-full bg-white border border-slate-200 rounded-xl px-3 py-3 text-sm font-semibold text-slate-800 outline-none focus:border-slate-400 transition-all";
+
+      const tabs = [
+        { id: "dashboard", icon: LayoutDashboard, label: "대시보드" },
+        { id: "assets", icon: List, label: "자산" },
+        { id: "contributions", icon: Wallet, label: "납입" },
+        { id: "settings", icon: Settings, label: "설정" },
+      ];
+
+      const topAccTabs = [
+        { id: "pension1", label: "연금저축1" },
+        { id: "pension2", label: "연금저축2" },
+        { id: "irp", label: "IRP" },
+        { id: "isa", label: "ISA" },
+        { id: "report", label: "통합리포트", icon: BarChart3 }
+      ];
+
+      return (
+        <div className="min-h-screen bg-slate-50 pb-[84px] text-slate-800 font-sans selection:bg-indigo-100">
+
+          {/* 상단 계좌 탭 */}
+          <div className="bg-slate-900 pt-4 pb-3 shadow-lg sticky top-0 z-40">
+            <div className="flex items-center gap-2 px-4">
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide flex-1 min-w-0">
+                {topAccTabs.map(t => (
+                  <button key={t.id} onClick={() => { setActiveAccount(t.id); setActiveTab("dashboard"); }}
+                    className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-2 text-xs font-bold transition-all shadow-sm rounded-full ${activeAccount === t.id ? 'bg-white text-slate-900' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+                    {t.icon && <t.icon size={14} />}
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 헤더 */}
+          {activeAccount !== "report" && (
+            <header className="bg-slate-900 pt-6 pb-16 px-4 text-center border-t border-slate-800">
+              <div className="flex items-center justify-center gap-2 mb-2">
+                <span className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ background: curAcc.color }} ></span>
+                <span className="text-white font-black text-xl">{global.userName}님의 {curAcc.label.split(" ")[0]}</span>
+              </div>
+              <p className="text-slate-400 text-xs font-medium">{curAcc.label.split(" ")[1]} 관리 대시보드</p>
+            </header>
+          )}
+
+          <main className="max-w-4xl mx-auto px-4 mt-4 space-y-6">
+
+            {/* 통합 리포트 */}
+            {activeAccount === "report" && (
+              <div className="space-y-4 pt-4">
+                {msg.text && (
+                  <div className={`p-4 rounded-2xl text-sm font-bold flex items-center gap-2.5 ${msg.type === "success" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-rose-50 text-rose-600 border border-rose-200"}`}>
+                    {msg.type === "success" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                    {msg.text}
+                  </div>
+                )}
+                <div className={`${cardBase} p-6 relative overflow-hidden`}>
+                  <div className="flex justify-between items-center mb-4 relative z-10">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="text-slate-700" size={20} />
+                      <h2 className="text-lg font-black text-slate-800">통합 자산 요약</h2>
+                    </div>
+                    <button onClick={fetchAllAccountsPrices} disabled={isFetchingAll}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold transition-all shadow-sm">
+                      <RefreshCw size={12} className={isFetchingAll ? "animate-spin" : ""} /> 일괄 갱신
+                    </button>
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">총 합계 자산</p>
+                  <p className="text-4xl font-black text-slate-900 mb-6 relative z-10">₩{fmt(reportStats.totalValue)}</p>
+                  <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 relative z-10">
+                    <div><p className="text-[10px] font-bold text-slate-400">총 납입 원금</p><p className="text-sm font-bold text-slate-700">₩{fmt(reportStats.totalPrincipal)}</p></div>
+                    <div><p className="text-[10px] font-bold text-slate-400">총 누적 손익</p><p className="text-sm font-bold text-rose-500">+{fmt(reportStats.totalValue - reportStats.totalPrincipal)}</p></div>
+                  </div>
+                </div>
+                <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                  <div className="absolute top-4 right-4 opacity-10"><ShieldCheck size={80} /></div>
+                  <p className="text-[10px] font-bold text-indigo-300 mb-1 uppercase tracking-widest">연말정산 예상 세액공제 환급금</p>
+                  <p className="text-3xl font-black text-white mb-3">₩{fmt(reportStats.estimatedTaxRefund)}</p>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    * 연금저축1 + IRP 당해 납입액 기준 ({global.incomeLevel === "5500이하" ? "16.5%" : "13.2%"})<br />
+                    * 실제 환급액은 개인의 결정세액에 따라 다를 수 있습니다.
+                  </p>
+                </div>
+                <DonutChart title="계좌별 자산 비중" subtitle="절세 3총사 내 자금 분산도" centerLabel="통합"
+                  data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
+              </div>
+            )}
+
+            {/* 대시보드 */}
+            {activeAccount !== "report" && activeTab === "dashboard" && (
+              <div className="-mt-20 relative z-10 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+                  {/* 총 평가금액 카드 */}
+                  <div className={`${cardBase} p-5`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-8 h-8 rounded-xl flex items-center justify-center text-white" style={{ background: curAcc.color }}><DollarSign size={16} /></div>
+                      <p className="text-xs font-bold text-slate-500 uppercase">총 평가 금액</p>
+                    </div>
+                    <p className="text-3xl font-black text-slate-900 mb-4">₩{fmt(stats.totalCurrentValue)}</p>
+                    <div className="space-y-2 border-t border-slate-100 pt-3">
+                      <div className="flex justify-between items-center"><span className="text-xs text-slate-500">평가손익</span><ReturnBadge amount={stats.bookReturnAmt} rate={stats.bookReturnRate} /></div>
+                      <div className="flex justify-between items-center"><span className="text-xs text-slate-500">누적손익</span><ReturnBadge amount={stats.principalReturnAmt} rate={stats.principalReturnRate} /></div>
+                    </div>
+                  </div>
+
+                  {/* 연간 납입 한도 카드 */}
+                  <div className={`${cardBase} p-5 flex flex-col justify-between`}>
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 text-slate-600"><TrendingUp size={16} /></div>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-bold text-slate-500 uppercase">연간 납입 한도</p>
+                            <Tip text={"올해 입금된 금액(배당 제외) 기준으로 소진율을 계산합니다.\n\n• 연금저축1: 600만원 (세액공제)\n• 연금저축2: 900만원 (초과납입)\n• IRP: 300만원\n• ISA: 2,000만원"} />
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-400">한도 ₩{fmt(curAcc.limit)}</span>
+                      </div>
+                      <p className="text-2xl font-black text-slate-900 mt-2"><span className="text-xs text-slate-400 mr-1 font-semibold">잔여</span>₩{fmt(Math.max(0, curAcc.limit - stats.yearCash))}</p>
+                    </div>
+                    <div className="mt-4">
+                      <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
+                        <span>올해 납입 ₩{fmt(stats.yearCash)}</span>
+                        <span>{((stats.yearCash / curAcc.limit) * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full transition-all" style={{ width: `${Math.min(100, (stats.yearCash / curAcc.limit) * 100)}%`, background: curAcc.color }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* IRP 안전자산 게이지 */}
+                {activeAccount === "irp" && (
+                  <div className={`${cardBase} p-5 border-l-4`} style={{ borderLeftColor: stats.riskRatio > 70 ? '#f43f5e' : '#10b981' }}>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
+                        <ShieldCheck size={14} className="text-amber-500" /> IRP 안전자산 30% 의무
+                      </span>
+                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>위험자산 {stats.riskRatio.toFixed(1)}%</span>
+                    </div>
+                    <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex">
+                      <div style={{ width: `${Math.min(70, stats.riskRatio)}%` }} className="bg-rose-400 h-full" />
+                      <div style={{ width: `${Math.max(0, stats.riskRatio - 70)}%` }} className="bg-rose-600 h-full animate-pulse" />
+                      <div className="flex-1 bg-emerald-400 h-full" />
+                    </div>
+                    {stats.riskRatio > 70 && <p className="mt-2 text-[10px] text-rose-500 font-bold">⚠️ 규정 위반: 안전자산 매수가 시급합니다.</p>}
+                  </div>
+                )}
+
+                {/* ISA D-Day */}
+                {activeAccount === "isa" && (
+                  <div className="grid grid-cols-2 gap-4">
+                    {[
+                      { l: "의무 가입 (3년)", v: (() => { const e = new Date(curAcc.openDate); e.setFullYear(e.getFullYear() + 3); const d = Math.ceil((e - new Date()) / 86400000); return d <= 0 ? "완료 ✅" : `D-${d}`; })() },
+                      { l: "계약 만기", v: (() => { const e = new Date(curAcc.openDate); e.setFullYear(e.getFullYear() + Number(curAcc.contractYears)); const d = Math.ceil((e - new Date()) / 86400000); return d <= 0 ? "만료 ⚠️" : `D-${d}`; })() }
+                    ].map(x => (
+                      <div key={x.l} className={`${cardBase} p-4 text-center`}>
+                        <p className="text-[10px] font-bold text-slate-400 mb-1">{x.l}</p>
+                        <p className="text-lg font-black text-slate-800">{x.v}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* 리밸런싱 D-Day */}
+                <div className={`${cardBase} p-5 flex items-center justify-between`}>
+                  <div>
+                    <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><Calendar size={14} /> 다음 리밸런싱</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-2xl font-black" style={{ color: dDay <= 0 ? curAcc.color : '#475569' }}>
+                        {dDay === 0 ? "D-Day" : dDay < 0 ? `D+${Math.abs(dDay)}` : `D-${dDay}`}
+                      </p>
+                      {dDay <= 0 && <span className="px-2 py-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full animate-pulse">실행일!</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => setShowRebalance(true)}
+                    className="px-4 py-2.5 rounded-xl text-white font-black text-xs shadow-md transition-all active:scale-95"
+                    style={{ background: dDay <= 0 ? curAcc.color : '#94a3b8' }}>
+                    {dDay <= 0 ? (activeHasTarget && !buyLogic.invalidTarget ? "주문서 열기" : "비중 설정 필요") : "미리보기"}
+                  </button>
+                </div>
+
+                {/* 자산 구성 성과 */}
+                <div className={`${cardBase} p-5`}>
+                  <p className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><PieChart size={16} style={{ color: curAcc.color }} /> 자산 구성 성과</p>
+                  <div className="h-8 w-full flex rounded-xl overflow-hidden bg-slate-100">
+                    <div style={{ width: `${stats.pctP}%`, background: '#3b82f6' }} className="h-full flex items-center justify-center transition-all">{stats.pctP > 12 && <span className="text-white font-black text-[10px]">원금</span>}</div>
+                    <div style={{ width: `${stats.pctD}%`, background: '#f59e0b' }} className="h-full flex items-center justify-center border-l border-white transition-all">{stats.pctD > 6 && <span className="text-white font-black text-[10px]">배당</span>}</div>
+                    <div style={{ width: `${stats.pctG}%`, background: '#f43f5e' }} className="h-full flex items-center justify-center border-l border-white transition-all">{stats.pctG > 8 && <span className="text-white font-black text-[10px]">수익</span>}</div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 mt-4">
+                    {[{ c: '#3b82f6', l: '순수 원금', p: stats.pctP, v: stats.purePrincipal }, { c: '#f59e0b', l: '재투자 배당', p: stats.pctD, v: stats.totalDividend }, { c: '#f43f5e', l: '평가 수익', p: stats.pctG, v: stats.capitalGain }].map(x => (
+                      <div key={x.l} className="flex-1 flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-600"><span className="w-2 h-2 rounded-full" style={{ background: x.c }}></span><span className="font-bold">{x.l} {x.p.toFixed(1)}%</span></div>
+                        <span className="text-xs font-bold text-slate-500">₩{fmt(x.v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* ISA 비과세 한도 초과 경고 알림 */}
+                  {activeAccount === "isa" && stats.capitalGain > 0 && (
+                    <div className="mt-4 p-4 rounded-xl text-xs font-bold border flex flex-col gap-1.5 bg-slate-50 border-slate-200">
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span className="flex items-center gap-1"><Info size={14} className="text-indigo-500"/> ISA 평가차익 (참고용)</span>
+                        <span>한도 {curAcc.isaType === '일반형(200만)' ? '200' : '400'}만원</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">현재 평가차익 (미실현 포함)</span>
+                        <span className={`font-black ${stats.capitalGain > (curAcc.isaType === '일반형(200만)' ? 2000000 : 4000000) ? 'text-rose-500' : 'text-emerald-500'}`}>
+                          ₩{fmt(stats.capitalGain)}
+                        </span>
+                      </div>
+                      {stats.capitalGain > (curAcc.isaType === '일반형(200만)' ? 2000000 : 4000000) ? (
+                        <p className="text-[10px] text-rose-500 mt-1">⚠️ 비과세 한도를 초과했습니다. 초과분은 9.9% 분리과세 됩니다.<br/>※ 실제 비과세 한도는 실현 수익 기준으로 계산됩니다.</p>
+                      ) : (
+                        <p className="text-[10px] text-slate-500 mt-1">※ 실제 비과세 한도는 실현 수익 기준으로 계산됩니다.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {activeHasTarget ? (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <DonutChart title="🎯 목표 비중" subtitle="설정된 자산배분 목표" data={curAcc.targetPortfolio} />
+                      <DonutChart title="📊 현재 비중" subtitle="실시간 시장 가치 반영" data={buyLogic.currentPortfolio} />
+                    </div>
+
+                    {/* 자산군별 괴리율 바 차트 */}
+                    {!buyLogic.invalidTarget && buyLogic.deviationData.length > 0 && (
+                      <div className={`${cardBase} p-6`}>
+                        <p className="text-sm font-bold text-slate-800 mb-5 flex items-center gap-2">
+                          <BarChart3 size={16} style={{ color: curAcc.color }} /> 자산군별 괴리율
+                        </p>
+                        <div className="space-y-6">
+                          {buyLogic.deviationData.map((item, i) => {
+                            const isDeficit = item.gap < -0.5;
+                            const isSurplus = item.gap > 0.5;
+                            const isBalanced = !isDeficit && !isSurplus;
+
+                            let badge = null;
+                            if (isDeficit && item.priority) {
+                              if (item.priority === 1) badge = <span className="bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
+                              else if (item.priority === 2) badge = <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
+                              else if (item.priority === 3) badge = <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
+                            } else if (isSurplus) {
+                              badge = <span className="text-blue-500 font-black text-[10px]">초과</span>;
+                            } else if (isBalanced) {
+                              badge = <span className="text-emerald-500 font-black text-[10px]">✓</span>;
+                            }
+
+                            let statusText = <span className="text-emerald-500 font-bold">✓ 균형</span>;
+                            if (isDeficit) {
+                              statusText = <span className="text-amber-500 font-bold">▼ {item.gap.toFixed(1)}% / ₩{fmt(Math.round(item.deficitAmount))} 부족</span>;
+                            } else if (isSurplus) {
+                              statusText = <span className="text-blue-500 font-bold">▲ +{item.gap.toFixed(1)}% / ₩{fmt(Math.round(Math.abs(item.deficitAmount)))} 초과</span>;
+                            }
+
+                            const maxScale = Math.max(item.targetWeight, item.currentWeight) * 1.2;
+                            const targetPct = maxScale > 0 ? (item.targetWeight / maxScale) * 100 : 0;
+                            const currentPct = maxScale > 0 ? (item.currentWeight / maxScale) * 100 : 0;
+
+                            return (
+                              <div key={i}>
+                                <div className="flex justify-between items-end mb-1.5">
+                                  <div className="flex items-center gap-2">
+                                    {badge}
+                                    <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                                  </div>
+                                  <div className="text-[11px]">{statusText}</div>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <div className="relative flex-1 h-3 bg-slate-100 rounded-full overflow-hidden">
+                                    {/* 현재 비중 바 */}
+                                    <div className="absolute top-0 bottom-0 left-0 rounded-full transition-all duration-500" style={{ width: `${currentPct}%`, backgroundColor: item.color }} />
+                                    {/* 목표 비중 기준선 */}
+                                    <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-400 z-10" style={{ left: `${targetPct}%`, marginLeft: '-1px' }} />
+                                  </div>
+                                  <div className="text-[10px] font-bold text-slate-500 w-24 text-right flex-shrink-0">
+                                    현재 <span className="text-slate-800">{item.currentWeight}%</span> / 목표 {item.targetWeight}%
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className={`${cardBase} p-6`}>
+                      <p className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><Calculator size={16} style={{ color: curAcc.color }} /> 적립식 매수 도우미 (Buy-Only)</p>
+                      
+                      {buyLogic.invalidTarget ? (
+                        <div className="py-8 text-center bg-rose-50 border border-rose-200 rounded-2xl flex flex-col items-center justify-center">
+                          <AlertTriangle size={24} className="text-rose-500 mb-2" />
+                          <p className="text-sm font-black text-rose-700">설정된 목표 비중 합계가 100%가 아닙니다.</p>
+                          <p className="text-xs font-bold text-rose-500 mt-1">설정 탭에서 목표 비중을 확인해주세요.</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mb-6 space-y-2">
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 입금 예정액 (₩)</label>
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₩</span>
+                              <input type="number" value={curAcc.monthlyInput === 0 ? "" : curAcc.monthlyInput} onChange={e => updateAcc({ monthlyInput: Number(e.target.value) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
+                            </div>
+                            {stats.thisMonthDividend > 0 && (
+                              <div className="flex justify-between items-center bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs font-bold text-amber-800">
+                                <span className="flex items-center gap-1.5"><Coins size={14} /> 이달 배당금 자동 합산</span>
+                                <span>+₩{fmt(stats.thisMonthDividend)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5 text-white">
+                              <span className="text-xs font-bold text-slate-300">총 매수 가능 예수금</span>
+                              <span className="text-base font-black">₩{fmt(totalInvestableCash)}</span>
+                            </div>
+                          </div>
+                          <p className="text-xs font-bold text-slate-400 uppercase mb-2">🛍️ 권장 매수 수량</p>
+                          <div className="space-y-2 mb-4">
+                            {buyLogic.buyOrders.length > 0 ? buyLogic.buyOrders.map((o, i) => (
+                              <div key={i} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="text-[10px] font-black bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded">{i + 1}순위</span>
+                                    <span className="text-sm font-bold text-slate-800">{o.assetName}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 font-bold">부족분 ₩{fmt(Math.round(o.deficit))}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-base font-black" style={{ color: curAcc.color }}>{fmt(o.shares)}주</p>
+                                  <p className="text-[10px] font-bold text-slate-400">₩{fmt(o.cost)}</p>
+                                </div>
+                              </div>
+                            )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">입금액 부족 또는 모든 비중이 초과되었습니다.</div>}
+                          </div>
+                          <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
+                            <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
+                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 무리하게 매수하지 말고 이월하세요.</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <DonutChart title="📊 현재 보유 비중" subtitle="보유 종목 평가금액 기준" data={stats.currentHoldingsChartData} />
+                    <div className={`${cardBase} p-6`}>
+                      <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl mb-4">
+                        <p className="text-xs text-indigo-800 font-medium">💡 설정 탭에서 <strong>목표 비중</strong>을 입력하시면 <strong>매수 도우미</strong>가 활성화됩니다.</p>
+                      </div>
+                      <div className="space-y-3">
+                        {curAcc.assets.map(a => (
+                          <div key={a.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            <div><p className="text-sm font-bold text-slate-800">{a.name || '종목명 없음'}</p><p className="text-[10px] text-slate-500">{a.category || '자산군 미설정'}</p></div>
+                            <div className="text-right"><p className="text-sm font-black text-slate-900">₩{fmt(a.quantity * (a.currentPrice || a.price))}</p><p className="text-[10px] text-slate-400 font-bold">{fmt(a.quantity)}주</p></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* 자산 탭 */}
+            {activeAccount !== "report" && activeTab === "assets" && (
+              <div className={`${cardBase} overflow-hidden`}>
+                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+                  <div>
+                    <h3 className="text-base font-black text-slate-800">보유 종목</h3>
+                    <p className="text-[10px] text-slate-400 font-bold mt-0.5">종목코드 입력 시 가격 자동 연동</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={fetchAllPrices} disabled={isFetching} className="p-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
+                      <RefreshCw size={16} className={isFetching ? "animate-spin" : ""} />
+                    </button>
+                    <button onClick={() => { const id = Date.now(); updateAcc({ assets: [...curAcc.assets, { id, category: "", name: "", code: "", quantity: 0, price: 0, currentPrice: 0, assetType: "위험자산" }] }); setExpandedAsset(id); }}
+                      className="flex items-center gap-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold shadow-md active:scale-95 transition-all">
+                      <Plus size={14} /> 추가
+                    </button>
+                  </div>
+                </div>
+                {fetchError && <div className="p-3 bg-rose-50 text-rose-600 text-xs font-bold flex gap-2"><AlertTriangle size={14} />{fetchError}</div>}
+
+                <div className="divide-y divide-slate-100">
+                  {curAcc.assets.length === 0 && <div className="py-16 text-center text-slate-400 text-sm font-bold">등록된 종목이 없습니다.</div>}
+                  {curAcc.assets.map((asset, index) => {
+                    const cv = asset.quantity * (asset.currentPrice || asset.price);
+                    const ti = asset.quantity * asset.price;
+                    const pr = ti > 0 ? ((cv - ti) / ti) * 100 : 0;
+                    const catColor = (curAcc.targetPortfolio.find(t => t.name === asset.category) || {}).color || '#cbd5e1';
+                    const isOpen = expandedAsset === asset.id;
+                    return (
+                      <div key={asset.id}>
+                        <button onClick={() => setExpandedAsset(isOpen ? null : asset.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[10px] shadow-sm flex-shrink-0" style={{ background: catColor }}>{(asset.category || "?").slice(0, 2)}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-black text-slate-800 truncate">{asset.name || "종목명 없음"}</p>
+                            <p className="text-[11px] text-slate-400 font-bold">{fmt(asset.quantity)}주 · ₩{fmt(asset.currentPrice || asset.price)}</p>
+                          </div>
+                          <div className="text-right"><p className="text-sm font-black text-slate-800">₩{fmt(cv)}</p><ReturnBadge amount={cv - ti} rate={pr} /></div>
+                          <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ml-1 ${isOpen ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
+                        </button>
+
+                        {isOpen && (
+                          <div className="p-5 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 shadow-inner">
+                            <div className="col-span-2">
+                              <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">종목명</label>
+                              <input type="text" value={asset.name} onChange={e => chAsset(asset.id, "name", e.target.value)} className={inpBase} />
+                            </div>
+
+                            {/* 종목코드 */}
+                            <div>
+                              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
+                                종목코드
+                                <Tip text="6자리 코드(예: 360750)를 입력하고 다른 곳을 터치하면 네이버증권에서 종목명과 현재가를 자동으로 불러옵니다." />
+                                {fetchingId === asset.id && <span className="text-indigo-500 animate-pulse normal-case font-bold ml-1">조회 중...</span>}
+                              </label>
+                              <input type="text" value={asset.code}
+                                onBlur={e => onCodeBlur(asset.id, e.target.value)}
+                                onChange={e => chAsset(asset.id, "code", e.target.value)}
+                                className={`${inpBase} ${fetchingId === asset.id ? 'border-indigo-300 bg-indigo-50' : ''}`}
+                                placeholder="예: 360750" />
+                              {fetchingId !== asset.id && asset.name && asset.code && <p className="text-[10px] text-emerald-600 font-bold mt-1 pl-1">✓ {asset.name}</p>}
+                            </div>
+
+                            {/* 자산군 */}
+                            <div>
+                              <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
+                                자산군
+                                <Tip text={activeAccount === "pension1"
+                                  ? "이 계좌는 올웨더 7개 자산군으로 고정되어 있습니다. 설정 탭에서 비중을 조절할 수 있습니다."
+                                  : "종목이 속한 자산군을 선택하세요. 목표 비중과 연동되어 매수 도우미와 리밸런싱 계산에 사용됩니다."} />
+                              </label>
+                              {activeAccount === "pension1" ? (
+                                <select value={asset.category} onChange={e => chAsset(asset.id, "category", e.target.value)} className={inpBase}>
+                                  <option value="">선택</option>
+                                  {curAcc.targetPortfolio.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                                </select>
+                              ) : (
+                                <AssetCategorySelector asset={asset} curAcc={curAcc} updateAcc={updateAcc} chAsset={chAsset} showMsg={showMsg} inpBase={inpBase} />
+                              )}
+                            </div>
+
+                            {/* IRP 자산 유형 */}
+                            {activeAccount === "irp" && (
+                              <div className="col-span-2">
+                                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
+                                  IRP 자산 유형
+                                  <Tip text={"IRP는 법적으로 위험자산 비중이 70%를 초과할 수 없습니다.\n\n• 위험자산: 주식형 파생 ETF (국내/해외 주식 등)\n• 안전자산: 채권형 ETF, 단기채, MMF 등\n\n70% 초과 시 대시보드에 경고가 표시됩니다."} />
+                                </label>
+                                <div className="flex gap-2">
+                                  {['위험자산', '안전자산'].map(type => (
+                                    <button key={type} onClick={() => chAsset(asset.id, "assetType", type)}
+                                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${asset.assetType === type ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                      {type}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">수량</label><input type="number" value={asset.quantity === 0 ? "" : asset.quantity} onChange={e => chAsset(asset.id, "quantity", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">매입단가</label><input type="number" value={asset.price === 0 ? "" : asset.price} onChange={e => chAsset(asset.id, "price", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
+                            <div className="col-span-2"><label className="block text-[10px] font-bold text-emerald-600 mb-1 uppercase">현재가 (₩)</label><input type="number" value={asset.currentPrice === 0 ? "" : asset.currentPrice} onChange={e => chAsset(asset.id, "currentPrice", Number(e.target.value))} className={`${inpBase} text-right font-black bg-emerald-50 border-emerald-200 text-emerald-700`} /></div>
+                            
+                            {/* 액션 버튼 그룹 (이동 및 삭제) */}
+                            <div className="col-span-2 flex justify-between items-center mt-2 border-t border-slate-200 pt-4">
+                              <div className="flex gap-2">
+                                <button onClick={() => moveAsset(index, -1)} disabled={index === 0} className="px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm text-slate-500 disabled:opacity-30 flex items-center gap-1 text-[10px] font-bold"><ArrowUp size={14}/> 위로</button>
+                                <button onClick={() => moveAsset(index, 1)} disabled={index === curAcc.assets.length - 1} className="px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm text-slate-500 disabled:opacity-30 flex items-center gap-1 text-[10px] font-bold"><ArrowDown size={14}/> 아래로</button>
+                              </div>
+                              <button onClick={() => updateAcc({ assets: curAcc.assets.filter(a => a.id !== asset.id) })} className="px-4 py-2 bg-rose-50 text-rose-500 rounded-xl text-[10px] font-bold flex justify-center gap-1 border border-rose-100"><Trash2 size={14} /> 종목 삭제</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 납입 탭 */}
+            {activeAccount !== "report" && activeTab === "contributions" && (
+              <div className="space-y-4">
+                <div className={`${cardBase} overflow-hidden`}>
+                  <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+                    <h3 className="text-base font-black text-slate-800 flex items-center gap-2"><Wallet size={18} className="text-slate-400" /> 올해 납입 내역</h3>
+                    <button onClick={() => { const id = Date.now(); updateAcc({ contributions: [...curAcc.contributions, { id, month: `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, amount: 0, type: "입금", memo: "" }] }); setExpandedContrib(id); }}
+                      className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-all">추가</button>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {curAcc.contributions.length === 0 && <div className="py-12 text-center text-slate-400 text-sm font-bold">내역이 없습니다.</div>}
+                    {[...curAcc.contributions].sort((a, b) => b.month.localeCompare(a.month)).map(item => (
+                      <div key={item.id}>
+                        <button onClick={() => setExpandedContrib(expandedContrib === item.id ? null : item.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
+                          <span className={`px-2 py-1.5 rounded-lg text-[10px] font-black border ${item.type === '배당' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>{item.type}</span>
+                          <div className="flex-1 min-w-0"><p className="text-sm font-black text-slate-800">{item.month}</p><p className="text-[10px] text-slate-400 font-bold truncate">{item.memo || "설명 없음"}</p></div>
+                          <p className="text-sm font-black text-slate-900">₩{fmt(item.amount)}</p>
+                          <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ${expandedContrib === item.id ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
+                        </button>
+                        {expandedContrib === item.id && (
+                          <div className="p-5 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 shadow-inner">
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">연월</label><input type="month" value={item.month} onChange={e => chContrib(item.id, "month", e.target.value)} className={inpBase} /></div>
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">유형</label><select value={item.type} onChange={e => chContrib(item.id, "type", e.target.value)} className={inpBase}><option value="입금">입금</option><option value="배당">배당</option></select></div>
+                            <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">금액 (₩)</label><input type="number" value={item.amount === 0 ? "" : item.amount} onChange={e => chContrib(item.id, "amount", Number(e.target.value))} className={`${inpBase} text-right font-black text-base`} /></div>
+                            <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1">설명</label><input type="text" value={item.memo} placeholder="설명 입력" onChange={e => chContrib(item.id, "memo", e.target.value)} className={inpBase} /></div>
+                            <button onClick={() => updateAcc({ contributions: curAcc.contributions.filter(c => c.id !== item.id) })} className="col-span-2 py-3 text-rose-500 bg-rose-50 rounded-xl text-xs font-bold border border-rose-100">삭제하기</button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 과거 누적 합계 */}
+                <div className={`${cardBase} overflow-hidden`}>
+                  <div className="w-full p-5 flex justify-between items-center bg-white transition-all">
+                    <div className="text-left flex-1">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">과거 누적 합계</p>
+                        <Tip text={"연도 마감 기능으로 이월된 과거 데이터입니다.\n\n• 원금: 해당 연도에 직접 입금한 금액 합계\n• 배당: 해당 연도에 받은 분배금 합계\n\n수기로 직접 수정할 수 있으며, 전체 손익 계산에 반영됩니다."} />
+                      </div>
+                      <p className="text-base font-black text-slate-800">원금 ₩{fmt(stats.purePrincipal - stats.yearCash)}<span className="text-amber-500 text-xs ml-2">+ 배당 ₩{fmt(stats.totalDividend)}</span></p>
+                    </div>
+                    <button onClick={() => setPastOpen(!pastOpen)} className="p-3 -mr-3 text-slate-400 hover:text-slate-600 transition-colors">
+                      <ChevronDown size={18} className={`transition-transform duration-200 ${pastOpen ? 'rotate-180 text-slate-700' : ''}`} />
+                    </button>
+                  </div>
+                  {pastOpen && (
+                    <div className="p-4 bg-slate-50 border-t border-slate-100 space-y-3 shadow-inner">
+                      {curAcc.pastContributions.map(p => (
+                        <div key={p.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                          <div className="flex justify-between items-center mb-3">
+                            <div className="flex items-center gap-2">
+                              <input type="number" value={p.year || ""} onChange={e => chPast(p.id, "year", Number(e.target.value))} className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-sm font-black text-center outline-none" />
+                              <span className="text-xs font-bold text-slate-500">년 마감 데이터</span>
+                            </div>
+                            <button onClick={() => updateAcc({ pastContributions: curAcc.pastContributions.filter(item => item.id !== p.id) })} className="text-rose-400 hover:text-rose-600"><Trash2 size={14} /></button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">원금 합계</label><input type="number" value={p.amount === 0 ? "" : p.amount} onChange={e => chPast(p.id, "amount", Number(e.target.value))} className={`${inpBase} py-2 text-right`} /></div>
+                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">배당 합계</label><input type="number" value={p.dividend === 0 ? "" : p.dividend} onChange={e => chPast(p.id, "dividend", Number(e.target.value))} className={`${inpBase} py-2 text-right`} /></div>
+                          </div>
+                        </div>
+                      ))}
+                      <button onClick={() => updateAcc({ pastContributions: [...curAcc.pastContributions, { id: Date.now(), year: currentYear - 1, amount: 0, dividend: 0 }] })}
+                        className="w-full py-4 border-2 border-dashed border-slate-200 text-slate-400 text-xs font-bold rounded-2xl hover:bg-white transition-all">+ 과거 연도 수동 추가</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* 설정 탭 */}
+            {activeAccount !== "report" && activeTab === "settings" && (
+              <div className="space-y-4">
+                {msg.text && (
+                  <div className={`p-4 rounded-2xl text-sm font-bold flex items-center gap-2.5 ${msg.type === "success" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-rose-50 text-rose-600 border border-rose-200"}`}>
+                    {msg.type === "success" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+                    {msg.text}
+                  </div>
+                )}
+
+                {activeAccount === "isa" && (
+                  <div className={`${cardBase} p-6 space-y-4`}>
+                    <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Settings size={16} className="text-emerald-500" /> ISA 상세 설정</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">계좌 개설일</label><input type="date" value={curAcc.openDate} onChange={e => updateAcc({ openDate: e.target.value })} className={`${inpBase} py-2.5 text-xs`} /></div>
+                      <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">계약 기간 (년)</label><input type="number" value={curAcc.contractYears} onChange={e => updateAcc({ contractYears: e.target.value })} className={`${inpBase} py-2.5 text-xs text-right`} /></div>
+                      <div className="col-span-2">
+                        <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase">ISA 유형</label>
+                        <div className="flex gap-2">
+                          {['일반형(200만)', '서민형(400만)'].map(type => (
+                            <button key={type} onClick={() => updateAcc({ isaType: type })} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all border ${curAcc.isaType === type ? 'bg-emerald-500 text-white border-emerald-500 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>{type}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className={`${cardBase} p-6`}>
+                  <p className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2"><PieChart size={16} style={{ color: curAcc.color }} /> {curAcc.label} 목표 비중</p>
+                  {curAcc.targetPortfolio.length === 0 && (
+                    <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl mb-4 text-xs text-indigo-800 font-medium">
+                      현재 자유형(비중 미설정)으로 작동 중입니다.<br />비중을 추가하시면 <strong>매수 도우미</strong>가 활성화됩니다.
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {curAcc.targetPortfolio.map((t, i) => (
+                      <div key={i} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 relative overflow-hidden">
+                        <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: t.color }} />
+                        <div className="flex justify-between items-center mb-2 ml-1">
+                          {activeAccount === "pension1" ? (
+                            <p className="text-[10px] font-bold text-slate-500">{t.name}</p>
+                          ) : (
+                            <input type="text" value={t.name}
+                              onChange={e => {
+                                const oldName = t.name; const newName = e.target.value;
+                                updateAcc({ targetPortfolio: curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, name: newName } : item), assets: curAcc.assets.map(a => a.category === oldName ? { ...a, category: newName } : a) });
+                              }}
+                              className="w-full bg-transparent text-[10px] font-bold text-slate-700 outline-none border-b border-slate-200 focus:border-slate-400 py-0.5" />
+                          )}
+                          {activeAccount !== "pension1" && (
+                            <button onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })} className="text-rose-400 hover:text-rose-600 p-0.5 ml-1"><Trash2 size={12} /></button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 ml-1">
+                          <input type="number" value={t.value === 0 ? "" : t.value} onChange={e => { const nt = curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, value: Number(e.target.value) } : item); updateAcc({ targetPortfolio: nt }); }} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-black text-slate-800 text-right outline-none" />
+                          <span className="text-[10px] font-bold text-slate-400">%</span>
+                        </div>
+                      </div>
+                    ))}
+                    {activeAccount !== "pension1" && (
+                      <button onClick={() => updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: "새 자산군", value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] })}
+                        className="bg-white border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-all min-h-[5rem]"><Plus size={20} /></button>
+                    )}
+                  </div>
+                  {curAcc.targetPortfolio.length > 0 && (
+                    <div className={`mt-4 p-4 rounded-xl flex justify-between items-center font-bold text-xs ${curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) === 100 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                      <span>합계 (100% 필수)</span>
+                      <span className="text-base font-black">{curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0)}%</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 리밸런싱 주기 설정 */}
+                <div className={`${cardBase} p-6 space-y-3`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4">
+                    <Calendar size={16} /> 정기 리밸런싱 주기
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 월</label>
+                      <select value={curAcc.rebalanceMonth} onChange={e => updateAcc({ rebalanceMonth: Number(e.target.value) })} className={inpBase}>
+                        {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 일</label>
+                      <input type="number" min="1" max="31" value={curAcc.rebalanceDay} 
+                        onChange={e => {
+                          const textVal = e.target.value;
+                          let val = Number(textVal);
+                          if (textVal.trim() === '' || isNaN(val) || val < 1) val = 1;
+                          const lastDay = new Date(new Date().getFullYear(), curAcc.rebalanceMonth, 0).getDate();
+                          const safeDay = Math.min(val, lastDay);
+                          updateAcc({ rebalanceDay: safeDay });
+                        }} 
+                        className={`${inpBase} text-right`} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 공통 계정 설정 */}
+                <div className={`${cardBase} p-6 space-y-4`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><User size={16} /> 공통 계정 설정</p>
+                  <div><label className="block text-[10px] font-bold text-slate-400 mb-1">사용자 이름</label><input type="text" value={global.userName} onChange={e => setGlobal({ ...global, userName: e.target.value })} className={inpBase} /></div>
+                  <div>
+                    <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-2 uppercase">
+                      급여 구간 (세액공제율 산정용)
+                      <Tip text={"연간 총급여 기준으로 세액공제율이 달라집니다.\n\n• 5,500만원 이하: 16.5% 공제\n• 5,500만원 초과: 13.2% 공제\n\n통합리포트에서 연말정산 예상 환급금 계산에 사용됩니다."} />
+                    </label>
+                    <div className="flex gap-2">
+                      {[{ id: "5500이하", l: "5,500만 이하 (16.5%)" }, { id: "5500초과", l: "5,500만 초과 (13.2%)" }].map(t => (
+                        <button key={t.id} onClick={() => setGlobal({ ...global, incomeLevel: t.id })}
+                          className={`flex-1 py-3.5 rounded-xl text-[10px] font-black transition-all border ${global.incomeLevel === t.id ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>{t.l}</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 데이터 관리 */}
+                <div className={`${cardBase} p-6 space-y-3`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><Archive size={16} /> 데이터 관리</p>
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">연도 마감 및 이월</p>
+                      <Tip text={"작년까지의 월별 납입 내역을 '과거 누적 합계'로 압축합니다.\n\n• 실행 전 자동으로 JSON 백업이 저장됩니다.\n• 현재 계좌에만 적용됩니다.\n• 올해 데이터는 그대로 유지됩니다."} />
+                    </div>
+                    <button onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
+                      <RefreshCw size={16} /> 지난 연도 데이터 마감 및 이월 (현재 계좌)
+                    </button>
+                  </div>
+                  <button onClick={exportData} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
+                  <label className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-400 cursor-pointer active:scale-95 transition-all">
+                    <Upload size={16} /> 백업 파일 불러오기 <input type="file" accept=".json" onChange={importData} className="hidden" />
+                  </label>
+                  
+                  {/* 안전한 초기화 버튼 */}
+                  <div className="pt-4 mt-2 border-t border-slate-100">
+                    {confirmReset ? (
+                      <div className="flex gap-2">
+                        <button onClick={() => { localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }} 
+                          className="flex-1 py-3 bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-all">예, 초기화합니다</button>
+                        <button onClick={() => setConfirmReset(false)} 
+                          className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl active:scale-95 transition-all">취소</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setConfirmReset(true)}
+                        className="w-full py-2 text-rose-400 font-bold text-xs hover:text-rose-600 transition-colors">전체 데이터 초기화 (샘플 로드)</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* 하단 탭 바 */}
+          <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-t border-slate-200 shadow-[0_-10px_40px_rgba(0,0,0,0.04)] pb-[env(safe-area-inset-bottom)]">
+            <div className="max-w-4xl mx-auto grid grid-cols-4 h-[68px]">
+              {tabs.map(tab => {
+                const active = activeTab === tab.id;
+                const tint = activeAccount === "report" ? "#1e293b" : curAcc.color;
+                return (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)} disabled={activeAccount === "report"}
+                    className={`relative flex flex-col items-center justify-center gap-1 transition-all ${activeAccount === "report" ? 'opacity-30' : ''}`}
+                    style={{ color: active ? tint : "#94a3b8" }}>
+                    {active && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-0.5 rounded-b-full" style={{ background: tint }} />}
+                    <tab.icon size={22} strokeWidth={active ? 2.5 : 2} style={{ transform: active ? 'scale(1.1)' : 'scale(1)' }} />
+                    <span className="text-[10px] font-black">{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+
+          {/* 리밸런싱 모달 */}
+          {showRebalance && activeHasTarget && !buyLogic.invalidTarget && (
+            <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-2xl rounded-t-3xl sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden" style={{ maxHeight: '90vh' }}>
+                <div className="p-6 border-b border-slate-100 flex justify-between items-start">
+                  <div>
+                    <p className="text-xs font-bold text-slate-400 mb-1">{curAcc.label} 정기 리밸런싱</p>
+                    <h2 className="text-xl font-black text-slate-800">매도 / 매수 주문서</h2>
+                  </div>
+                  <button onClick={() => setShowRebalance(false)} className="p-2 rounded-full bg-slate-100 text-slate-500"><X size={18} /></button>
+                </div>
+                <div className="p-4 sm:p-6 overflow-y-auto space-y-3 bg-slate-50 flex-1">
+                  {buyLogic.fullRebalancePlan.length === 0 ? (
+                    <div className="text-center py-10 text-slate-400 text-sm font-bold border-2 border-dashed border-slate-200 rounded-2xl bg-white">현재 비중이 완벽합니다! 🎉</div>
+                  ) : buyLogic.fullRebalancePlan.map((item, i) => {
+                    const sell = item.shares < 0;
+                    return (
+                      <div key={i} className="rounded-2xl border p-4 shadow-sm bg-white" style={{ borderColor: sell ? '#bfdbfe' : '#fecdd3' }}>
+                        <div className="flex justify-between gap-3 mb-3">
+                          <div className="min-w-0"><p className="text-[10px] font-bold text-slate-400">{item.name}</p><p className="text-sm font-bold text-slate-800 truncate">{item.assetName}</p></div>
+                          <span className="flex-shrink-0 text-sm font-black px-3 py-1.5 rounded-xl border" style={sell ? { background: '#eff6ff', color: '#1d4ed8', borderColor: '#dbeafe' } : { background: '#fff1f2', color: '#be123c', borderColor: '#fecdd3' }}>
+                            {sell ? "매도" : "매수"} {fmt(Math.abs(item.shares))}주
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-xs">
+                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">비중 조절</p><p className="font-bold text-slate-700">{item.currentWeight}% → {item.targetWeight}%</p></div>
+                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">현재가</p><p className="font-bold text-slate-700">₩{fmt(item.currentPrice)}</p></div>
+                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">예상금액</p><p className="font-black" style={{ color: sell ? '#2563eb' : '#e11d48' }}>{sell ? "-" : "+"}₩{fmt(Math.abs(item.shares * item.currentPrice))}</p></div>
+                        </div>
+                        {sell && item.profit > 0 && <div className="mt-2 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-lg px-3 py-2 border border-rose-100 inline-block">예상 실현 차익 (과세이연): +₩{fmt(item.profit)}</div>}
+                      </div>
+                    );
+                  })}
+                  {buyLogic.fullRebalancePlan.length > 0 && (
+                    <>
+                      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-[11px] text-amber-800 shadow-sm mt-4">
+                        <p className="font-bold flex items-center gap-1.5 mb-2"><Info size={14} /> 리밸런싱 세금 참고사항</p>
+                        <ul className="list-disc pl-4 space-y-1 opacity-90">
+                          <li><strong>파란색(매도) 주문을 먼저</strong> 체결하여 예수금을 확보하세요.</li>
+                          <li><strong>과세이연 계좌</strong>이므로 매매차익에 대한 세금은 인출 시점까지 없습니다.</li>
+                          <li>세액공제를 받지 않은 초과 납입분은 <strong>납입확인서 및 불공제 확인서</strong> 제출 시 과세 제외됩니다.</li>
+                        </ul>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                        <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">총 매도 예상 차익 (과세이연)</span><span className="font-black text-rose-500">₩{fmt(buyLogic.totalProfit)}</span></div>
+                        <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">예상 매도 수수료 (~0.2%)</span><span className="font-black text-slate-400">-₩{fmt(Math.round(buyLogic.fee))}</span></div>
+                        <div className="border-t border-slate-100 pt-3 mt-1 flex justify-between items-center">
+                          <span className="text-sm font-black text-slate-800">매도 후 확보 예수금</span>
+                          <span className="text-lg font-black text-blue-600">₩{fmt(Math.round(buyLogic.totalSellAmt - buyLogic.fee))}</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="p-4 sm:p-6 border-t border-slate-100 bg-white">
+                  <button onClick={() => setShowRebalance(false)} className="w-full py-4 bg-slate-900 text-white font-black text-sm rounded-2xl shadow-lg active:scale-95 transition-all">확인 및 닫기</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const rootElement = document.getElementById("root");
+    const root = createRoot(rootElement);
+    root.render(<App />);
+  </script>
+</body>
+</html>
+
