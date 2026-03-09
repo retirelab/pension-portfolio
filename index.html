@@ -12,7 +12,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
-    /* 스크롤바 숨김 유틸리티 클래스 (Tailwind 기본 미포함 기능 보완) */
+    /* 스크롤바 숨김 유틸리티 클래스 */
     .scrollbar-hide::-webkit-scrollbar {
       display: none;
     }
@@ -22,6 +22,35 @@
     }
     body {
       -webkit-tap-highlight-color: transparent;
+    }
+
+    /* 주식+채권 슬라이더 커스텀 스타일 */
+    .custom-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 6px;
+      background: #e2e8f0; /* slate-200 */
+      border-radius: 8px;
+      outline: none;
+    }
+    .custom-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #a855f7; /* purple-500 */
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .custom-slider::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #a855f7;
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
   </style>
 </head>
@@ -36,7 +65,7 @@
       TrendingUp, Calendar, AlertTriangle, CheckCircle2, DollarSign,
       LayoutDashboard, List, Plus, Trash2, RefreshCw, Wallet, Calculator,
       Info, ChevronDown, X, Settings, Download, Upload, PieChart, Coins,
-      Archive, ShieldCheck, BarChart3, User, ArrowUp, ArrowDown
+      Archive, ShieldCheck, BarChart3, User, ArrowUp, ArrowDown, SlidersHorizontal
     } from "https://esm.sh/lucide-react@0.292.0";
 
     const fmt = (n) => {
@@ -46,12 +75,116 @@
 
     const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
 
+    // 혼합 자산군 관리용 상수
+    const MIXED_ASSET_CATEGORIES = ["주식+채권"];
+
+    // 공통 자산군 프리셋 목록
+    const ASSET_PRESETS = [
+      { label: "국내주식", color: "#6366f1" }, { label: "미국주식", color: "#3b82f6" },
+      { label: "중국주식", color: "#ef4444" }, { label: "선진국주식", color: "#0ea5e9" }, 
+      { label: "신흥국주식", color: "#f97316" }, { label: "주식+채권", color: "#a855f7" }, 
+      { label: "미국채권", color: "#8b5cf6" }, { label: "국내채권", color: "#10b981" }, 
+      { label: "글로벌채권", color: "#14b8a6" },
+      { label: "금", color: "#f59e0b" }, { label: "원자재", color: "#d97706" },
+      { label: "리츠(부동산)", color: "#ec4899" }, { label: "현금/단기채", color: "#94a3b8" },
+      { label: "직접입력", color: "#64748b" },
+    ];
+
+    // 자산군-유형 자동 매핑 상수
+    const CATEGORY_ASSET_TYPE = {
+      "국내주식":    "위험자산",
+      "미국주식":    "위험자산",
+      "중국주식":    "위험자산",
+      "선진국주식":  "위험자산",
+      "신흥국주식":  "위험자산",
+      "금":          "위험자산",
+      "원자재":      "위험자산",
+      "리츠(부동산)":"위험자산",
+      "미국채권":    "안전자산",
+      "국내채권":    "안전자산",
+      "글로벌채권":  "안전자산",
+      "현금/단기채": "안전자산",
+      // "주식+채권"은 혼합자산이므로 포함하지 않음
+      // 직접입력은 포함하지 않음 → 기본값 "위험자산" 유지
+    };
+
     const PENSION1_DEFAULT_TARGET = [
       { name: "S&P500", value: 24, color: "#3b82f6" }, { name: "나스닥", value: 9, color: "#14b8a6" },
       { name: "CSI300", value: 13, color: "#ef4444" }, { name: "한국200", value: 8, color: "#6366f1" },
       { name: "미국채", value: 12, color: "#8b5cf6" }, { name: "국고채", value: 12, color: "#10b981" },
       { name: "금", value: 22, color: "#f59e0b" },
     ];
+
+    // 1. 하위호환성을 위한 dcIrp 초기 객체 및 정규화 함수 (샘플 데이터 추가)
+    const createDefaultDcIrp = () => ({
+      limit: 0, color: "#f97316", label: "퇴직IRP (DC형)",
+      rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 200000,
+      employerMonthlyInput: 300000, accountKind: "dc", taxCreditEligible: false,
+      targetPortfolio: [
+        { name: "미국주식", value: 40, color: "#3b82f6" },
+        { name: "주식+채권", value: 30, color: "#a855f7" },
+        { name: "현금/단기채", value: 30, color: "#94a3b8" }
+      ],
+      assets: [
+        { id: 1, category: "미국주식",   name: "KODEX 미국나스닥100",        code: "379810", quantity: 66,  price: 21100, currentPrice: 23855, assetType: "위험자산" },
+        { id: 2, category: "주식+채권",  name: "TIGER 미국나스닥100채권혼합Fn", code: "435420", quantity: 45,  price: 12000, currentPrice: 13130, stockRatio: 40 },
+        { id: 3, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 60,  price: 10200, currentPrice: 10250, assetType: "안전자산" },
+      ], 
+      contributions: [
+        { id: 1, month: "2026-01", amount: 300000, type: "회사부담금", memo: "정기 회사부담금" },
+        { id: 2, month: "2026-02", amount: 300000, type: "회사부담금", memo: "정기 회사부담금" },
+        { id: 3, month: "2026-03", amount: 200000, type: "개인추가납입", memo: "개인 추가 납입" }
+      ], 
+      pastContributions: [
+        { id: 1, year: 2024, amount: 3600000, dividend: 50000 }, 
+        { id: 2, year: 2025, amount: 3600000, dividend: 120000 }
+      ]
+    });
+
+    const normalizeAccounts = (raw) => {
+      const next = { ...raw };
+      if (!next.dcIrp) {
+        next.dcIrp = createDefaultDcIrp();
+      } else {
+        next.dcIrp = { ...createDefaultDcIrp(), ...next.dcIrp };
+      }
+      
+      Object.keys(next).forEach(accKey => {
+        if (next[accKey].assets) {
+          next[accKey].assets = next[accKey].assets.map(asset => {
+            if (MIXED_ASSET_CATEGORIES.includes(asset.category) && asset.stockRatio === undefined) {
+              return { ...asset, stockRatio: 30 };
+            }
+            return asset;
+          });
+        }
+      });
+      
+      return next;
+    };
+
+    const getAssetMarketValue = (a) =>
+      a.quantity * (a.currentPrice || a.price);
+
+    // 규정용 위험자산 가중치 (0~1)
+    // 혼합자산: stockRatio/100, 위험자산: 1.0, 그 외: 0.0
+    const getRiskWeight = (a) => {
+      if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
+        return (a.stockRatio ?? 30) / 100;
+      }
+      if (a.assetType === "위험자산") return 1.0;
+      return 0.0;
+    };
+
+    // 실질 주식 노출 가중치 (0~1)
+    // getRiskWeight와 현재 동일하나 향후 기준 분리 가능성을 위해 별도 유지
+    const getEquityExposureWeight = (a) => {
+      if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
+        return (a.stockRatio ?? 30) / 100;
+      }
+      if (a.assetType === "위험자산") return 1.0;
+      return 0.0;
+    };
 
     function Tip({ text }) {
       const [show, setShow] = useState(false);
@@ -135,22 +268,99 @@
       );
     }
 
+    function TargetCategorySelector({ t, i, curAcc, updateAcc }) {
+      const [showDropdown, setShowDropdown] = useState(false);
+      const [customMode, setCustomMode] = useState(false);
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!showDropdown) return;
+        const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setShowDropdown(false); };
+        document.addEventListener("mousedown", handler);
+        document.addEventListener("touchstart", handler);
+        return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler); };
+      }, [showDropdown]);
+
+      const handleChange = (newName, newColor) => {
+        const oldName = t.name;
+        updateAcc({
+          targetPortfolio: curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, name: newName, color: newColor || item.color } : item),
+          assets: curAcc.assets.map(a => a.category === oldName ? { ...a, category: newName } : a)
+        });
+      };
+
+      if (customMode) {
+        return (
+          <input type="text" value={t.name} autoFocus
+            onChange={e => handleChange(e.target.value, t.color)}
+            onBlur={() => setCustomMode(false)}
+            className="w-full bg-transparent text-[10px] font-bold text-slate-700 outline-none border-b border-slate-200 focus:border-slate-400 py-0.5" 
+          />
+        );
+      }
+
+      return (
+        <div className="relative w-full" ref={ref}>
+          <button type="button" onClick={() => setShowDropdown(!showDropdown)} className="w-full bg-transparent text-[10px] font-bold text-slate-700 outline-none border-b border-slate-200 focus:border-slate-400 py-0.5 text-left flex justify-between items-center">
+            <span className="truncate pr-1">{t.name || "자산군 선택"}</span>
+            <ChevronDown size={12} className={`flex-shrink-0 transition-transform duration-200 ${showDropdown ? 'rotate-180 text-slate-700' : 'text-slate-400'}`} />
+          </button>
+          {showDropdown && (
+            <div className="absolute top-full left-0 mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-xl z-[60] overflow-hidden">
+              <div className="p-1 flex flex-col max-h-48 overflow-y-auto scrollbar-hide">
+                {ASSET_PRESETS.map(preset => (
+                  <button key={preset.label} type="button" onClick={() => {
+                    if (preset.label === "직접입력") {
+                      setCustomMode(true);
+                      setShowDropdown(false);
+                    } else {
+                      handleChange(preset.label, preset.color);
+                      setShowDropdown(false);
+                    }
+                  }} className={`flex items-center gap-2 w-full px-3 py-2 rounded-lg text-[11px] font-bold text-left transition-colors ${preset.label === "직접입력" ? "text-slate-400 border-t border-slate-100 mt-1 pt-2 justify-center" : "hover:bg-slate-50 text-slate-700"}`}>
+                    {preset.label !== "직접입력" && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{background: preset.color}}></span>}
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function AssetCategorySelector({ asset, curAcc, updateAcc, chAsset, showMsg, inpBase }) {
-      const ASSET_PRESETS = [
-        { label: "국내주식", color: "#6366f1" }, { label: "미국주식", color: "#3b82f6" },
-        { label: "선진국주식", color: "#0ea5e9" }, { label: "중국주식", color: "#ef4444" },
-        { label: "신흥국주식", color: "#f97316" }, { label: "미국채권", color: "#8b5cf6" },
-        { label: "국내채권", color: "#10b981" }, { label: "글로벌채권", color: "#14b8a6" },
-        { label: "금", color: "#f59e0b" }, { label: "원자재", color: "#d97706" },
-        { label: "리츠(부동산)", color: "#ec4899" }, { label: "현금/단기채", color: "#94a3b8" },
-        { label: "직접입력", color: "#64748b" },
-      ];
       const [showPreset, setShowPreset] = useState(false);
       const [customMode, setCustomMode] = useState(false);
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!showPreset) return;
+        const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setShowPreset(false); };
+        document.addEventListener("mousedown", handler);
+        document.addEventListener("touchstart", handler);
+        return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("touchstart", handler); };
+      }, [showPreset]);
 
       const handleSelect = (preset) => {
         if (preset.label === "직접입력") { setCustomMode(true); setShowPreset(false); return; }
-        chAsset(asset.id, "category", preset.label);
+        
+        const updates = { category: preset.label };
+
+        // 자산군 선택 시 assetType 자동 세팅
+        if (CATEGORY_ASSET_TYPE[preset.label]) {
+          updates.assetType = CATEGORY_ASSET_TYPE[preset.label];
+        }
+
+        // 혼합자산 stockRatio 기본값
+        if (MIXED_ASSET_CATEGORIES.includes(preset.label) && asset.stockRatio === undefined) {
+          updates.stockRatio = 30;
+        }
+        
+        updateAcc({
+           assets: curAcc.assets.map(a => a.id === asset.id ? { ...a, ...updates } : a)
+        });
+        
         setShowPreset(false); setCustomMode(false);
         
         const isExist = curAcc.targetPortfolio.some(t => t.name.trim().toLowerCase() === preset.label.toLowerCase());
@@ -168,10 +378,24 @@
               onBlur={e => {
                 const val = e.target.value.trim();
                 if (val) {
-                  chAsset(asset.id, "category", val);
+                  const updates = { category: val };
+                  if (CATEGORY_ASSET_TYPE[val]) {
+                    updates.assetType = CATEGORY_ASSET_TYPE[val];
+                  }
+                  if (MIXED_ASSET_CATEGORIES.includes(val) && asset.stockRatio === undefined) {
+                    updates.stockRatio = 30;
+                  }
+                  
                   const isExist = curAcc.targetPortfolio.some(t => t.name.trim().toLowerCase() === val.toLowerCase());
+                  
+                  updateAcc({
+                    assets: curAcc.assets.map(a => a.id === asset.id ? { ...a, ...updates } : a),
+                    ...(isExist ? {} : {
+                      targetPortfolio: [...curAcc.targetPortfolio, { name: val, value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }]
+                    })
+                  });
+
                   if (!isExist) {
-                    updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: val, value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] });
                     showMsg("success", `"${val}" 자산군이 등록되었습니다.`);
                   }
                 }
@@ -184,13 +408,13 @@
       }
 
       return (
-        <div className="relative">
+        <div className="relative" ref={ref}>
           <button type="button" onClick={() => setShowPreset(!showPreset)} className={`${inpBase} text-left flex justify-between items-center ${!asset.category ? 'text-slate-400' : 'text-slate-800'}`}>
             <span className="truncate mr-2">{asset.category || "자산군 선택"}</span>
             <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-200 ${showPreset ? 'rotate-180 text-slate-700' : 'text-slate-400'}`}/>
           </button>
           {showPreset && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 overflow-hidden">
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-[60] overflow-hidden">
               <div className="p-1.5 flex flex-col max-h-72 overflow-y-auto scrollbar-hide">
                 {ASSET_PRESETS.map(preset => (
                   <button key={preset.label} type="button" onClick={() => handleSelect(preset)}
@@ -248,7 +472,7 @@
           pastContributions: [{ id: 1, year: 2025, amount: 3600000, dividend: 85000 }],
         },
         irp: {
-          limit: 3000000, color: "#f59e0b", label: "IRP (퇴직연금)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 250000,
+          limit: 3000000, color: "#f59e0b", label: "개인IRP", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 250000,
           targetPortfolio: [{ name: "미국주식", value: 50, color: "#3b82f6" }, { name: "미국채권", value: 30, color: "#8b5cf6" }, { name: "현금/단기채", value: 20, color: "#94a3b8" }],
           assets: [
             { id: 1, category: "미국주식",   name: "TIGER 미국S&P500",        code: "360750", quantity: 80,  price: 14200, currentPrice: 15100, assetType: "위험자산" },
@@ -258,6 +482,7 @@
           contributions: [{ id: 1, month: "2026-01", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 2, month: "2026-02", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 3, month: "2026-03", amount: 250000, type: "입금", memo: "IRP 납입" }],
           pastContributions: [{ id: 1, year: 2024, amount: 3000000, dividend: 60000 }, { id: 2, year: 2025, amount: 3000000, dividend: 95000 }],
         },
+        dcIrp: createDefaultDcIrp(),
         isa: {
           limit: 20000000, color: "#10b981", label: "ISA (중개형)", rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 500000, isaType: "일반형(200만)", openDate: "2024-03-01", contractYears: 3,
           targetPortfolio: [{ name: "미국주식", value: 25, color: "#3b82f6" }, { name: "미국채권", value: 25, color: "#8b5cf6" }, { name: "금", value: 25, color: "#f59e0b" }, { name: "현금/단기채", value: 25, color: "#94a3b8" }],
@@ -303,7 +528,11 @@
         try {
           const storedAccounts = localStorage.getItem("retireLab_accounts_v3");
           const storedGlobal = localStorage.getItem("retireLab_global_v3");
-          if (storedAccounts && storedGlobal) { setAccounts(JSON.parse(storedAccounts)); setGlobal(JSON.parse(storedGlobal)); }
+          if (storedAccounts && storedGlobal) { 
+            const parsedAccounts = normalizeAccounts(JSON.parse(storedAccounts));
+            setAccounts(parsedAccounts); 
+            setGlobal(JSON.parse(storedGlobal)); 
+          }
         } catch (e) {}
         setIsLoaded(true);
       }, []);
@@ -344,6 +573,10 @@
         const activeDividend = acc.contributions.filter(c => c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const currentMonthStr = `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
         const thisMonthDividend = acc.contributions.filter(c => c.month === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        
+        const employerCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "회사부담금").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const personalCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+
         const purePrincipal = prevPrincipal + activeCash;
         const totalDividend = prevDividend + activeDividend;
         const capitalGain = totalCurrentValue - (purePrincipal + totalDividend);
@@ -355,8 +588,13 @@
         const pctD = totalCurrentValue > 0 ? (totalDividend / totalCurrentValue) * 100 : 0;
         const pctG = (totalCurrentValue > 0 && capitalGain > 0) ? (capitalGain / totalCurrentValue) * 100 : 0;
         const yearCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-        const riskAssetValue = acc.assets.filter(a => a.assetType === "위험자산" || !a.assetType).reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
+        
+        const riskAssetValue = acc.assets.reduce((s, a) => s + getAssetMarketValue(a) * getRiskWeight(a), 0);
         const riskRatio = totalCurrentValue > 0 ? (riskAssetValue / totalCurrentValue) * 100 : 0;
+
+        const equityExposureValue = acc.assets.reduce((s, a) => s + getAssetMarketValue(a) * getEquityExposureWeight(a), 0);
+        const equityExposureRatio = totalCurrentValue > 0 ? (equityExposureValue / totalCurrentValue) * 100 : 0;
+        
         const accHasTarget = acc.targetPortfolio && acc.targetPortfolio.length > 0 && acc.targetPortfolio.some(t => t.value > 0);
         const currentHoldingsChartData = [];
         if (!accHasTarget && totalCurrentValue > 0) {
@@ -370,7 +608,7 @@
           }, {});
           Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / totalCurrentValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
         }
-        return { totalCurrentValue, totalBookValue, purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, riskRatio, thisMonthDividend, currentHoldingsChartData };
+        return { totalCurrentValue, totalBookValue, purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, employerCash, personalCash };
       };
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
@@ -378,7 +616,7 @@
       const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
 
       const reportStats = useMemo(() => {
-        const allKeys = ["pension1", "pension2", "irp", "isa"];
+        const allKeys = ["pension1", "pension2", "irp", "dcIrp", "isa"];
         const statsMap = {};
         
         allKeys.forEach(key => {
@@ -393,7 +631,11 @@
           return acc;
         }, { totalValue: 0, totalPrincipal: 0, accountValues: [] });
         
-        const creditBase = statsMap.pension1.yearCash + statsMap.irp.yearCash;
+        const dcIrpTaxCreditCash = (accounts.dcIrp && accounts.dcIrp.taxCreditEligible) ? accounts.dcIrp.contributions
+          .filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입")
+          .reduce((s, c) => s + (Number(c.amount) || 0), 0) : 0;
+
+        const creditBase = (statsMap.pension1?.yearCash || 0) + (statsMap.irp?.yearCash || 0) + dcIrpTaxCreditCash;
         summary.estimatedTaxRefund = Math.min(creditBase, 9000000) * (global.incomeLevel === "5500이하" ? 0.165 : 0.132);
         return summary;
       }, [accounts, global, currentYear]);
@@ -633,7 +875,8 @@
           try { 
             const d = JSON.parse(ev.target.result); 
             if (d.accounts && typeof d.accounts === 'object' && d.global && typeof d.global === 'object' && d.schemaVersion) { 
-              setAccounts(d.accounts); 
+              const normalizedAccounts = normalizeAccounts(d.accounts);
+              setAccounts(normalizedAccounts); 
               setGlobal(d.global); 
               showMsg("success", "통합 데이터 복구 완료!"); 
             } else {
@@ -668,11 +911,12 @@
         exportData();
 
         const sums = {};
+        const PRINCIPAL_TYPES = ["입금", "개인추가납입", "회사부담금"];
         unSettled.forEach(c => {
           const y = parseInt(c.month.split("-")[0], 10); 
           yearsProcessed.add(y);
           if (!sums[y]) sums[y] = { amount: 0, dividend: 0 };
-          if (c.type === "입금") sums[y].amount += Number(c.amount || 0); 
+          if (PRINCIPAL_TYPES.includes(c.type)) sums[y].amount += Number(c.amount || 0); 
           else if (c.type === "배당") sums[y].dividend += Number(c.amount || 0);
         });
 
@@ -705,7 +949,8 @@
       const topAccTabs = [
         { id: "pension1", label: "연금저축1" },
         { id: "pension2", label: "연금저축2" },
-        { id: "irp", label: "IRP" },
+        { id: "irp", label: "개인IRP" },
+        { id: "dcIrp", label: "퇴직IRP(DC)" },
         { id: "isa", label: "ISA" },
         { id: "report", label: "통합리포트", icon: BarChart3 }
       ];
@@ -735,7 +980,7 @@
                 <span className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ background: curAcc.color }} ></span>
                 <span className="text-white font-black text-xl">{global.userName}님의 {curAcc.label.split(" ")[0]}</span>
               </div>
-              <p className="text-slate-400 text-xs font-medium">{curAcc.label.split(" ")[1]} 관리 대시보드</p>
+              <p className="text-slate-400 text-xs font-medium">{curAcc.label.split(" ")[1] || "관리 대시보드"}</p>
             </header>
           )}
 
@@ -773,11 +1018,11 @@
                   <p className="text-[10px] font-bold text-indigo-300 mb-1 uppercase tracking-widest">연말정산 예상 세액공제 환급금</p>
                   <p className="text-3xl font-black text-white mb-3">₩{fmt(reportStats.estimatedTaxRefund)}</p>
                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                    * 연금저축1 + IRP 당해 납입액 기준 ({global.incomeLevel === "5500이하" ? "16.5%" : "13.2%"})<br />
+                    * 연금저축1 + 개인IRP + 퇴직IRP(개인추가분) 당해 납입액 기준 ({global.incomeLevel === "5500이하" ? "16.5%" : "13.2%"})<br />
                     * 실제 환급액은 개인의 결정세액에 따라 다를 수 있습니다.
                   </p>
                 </div>
-                <DonutChart title="계좌별 자산 비중" subtitle="절세 3총사 내 자금 분산도" centerLabel="통합"
+                <DonutChart title="계좌별 자산 비중" subtitle="포트폴리오 내 자금 분산도" centerLabel="통합"
                   data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
               </div>
             )}
@@ -800,15 +1045,36 @@
                     </div>
                   </div>
 
-                  {/* 연간 납입 한도 카드 */}
-                  <div className={`${cardBase} p-5 flex flex-col justify-between`}>
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
+                  {/* 연간 납입 한도 카드 (DC형 예외 처리) */}
+                  {activeAccount === "dcIrp" ? (
+                    <div className={`${cardBase} p-5 flex flex-col justify-center`}>
+                      <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 text-slate-600"><TrendingUp size={16} /></div>
-                          <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-bold text-slate-500 uppercase">올해 납입 현황</p>
+                        </div>
+                        <span className="px-2 py-1 bg-orange-100 text-orange-600 text-[10px] font-black rounded-lg">퇴직연금</span>
+                      </div>
+                      <div className="space-y-3 border-t border-slate-100 pt-4">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-slate-500">🏢 회사부담금</span>
+                          <span className="text-base font-black text-slate-800">₩{fmt(stats.employerCash)}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-slate-500">🧑 개인추가납입</span>
+                          <span className="text-base font-black text-slate-800">₩{fmt(stats.personalCash)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={`${cardBase} p-5 flex flex-col justify-between`}>
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-slate-100 text-slate-600"><TrendingUp size={16} /></div>
+                            <div className="flex items-center gap-1.5">
                             <p className="text-xs font-bold text-slate-500 uppercase">연간 납입 한도</p>
-                            <Tip text={"올해 입금된 금액(배당 제외) 기준으로 소진율을 계산합니다.\n\n• 연금저축1: 600만원 (세액공제)\n• 연금저축2: 900만원 (초과납입)\n• IRP: 300만원\n• ISA: 2,000만원"} />
+                            <Tip text={"올해 입금된 금액(배당 제외) 기준으로 소진율을 계산합니다.\n\n• 연금저축1: 600만원 (세액공제)\n• 연금저축2: 900만원 (초과납입)\n• 개인IRP: 300만원\n• ISA: 2,000만원"} />
                           </div>
                         </div>
                         <span className="text-[10px] font-bold text-slate-400">한도 ₩{fmt(curAcc.limit)}</span>
@@ -818,23 +1084,24 @@
                     <div className="mt-4">
                       <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
                         <span>올해 납입 ₩{fmt(stats.yearCash)}</span>
-                        <span>{((stats.yearCash / curAcc.limit) * 100).toFixed(1)}%</span>
+                        <span>{curAcc.limit > 0 ? ((stats.yearCash / curAcc.limit) * 100).toFixed(1) : "0.0"}%</span>
                       </div>
                       <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full transition-all" style={{ width: `${Math.min(100, (stats.yearCash / curAcc.limit) * 100)}%`, background: curAcc.color }} />
+                        <div className="h-full transition-all" style={{ width: `${Math.min(100, curAcc.limit > 0 ? (stats.yearCash / curAcc.limit) * 100 : 0)}%`, background: curAcc.color }} />
                       </div>
                     </div>
                   </div>
-                </div>
+                )}
+              </div>
 
-                {/* IRP 안전자산 게이지 */}
-                {activeAccount === "irp" && (
+              {/* IRP/DC 안전자산 게이지 */}
+                {(activeAccount === "irp" || activeAccount === "dcIrp") && (
                   <div className={`${cardBase} p-5 border-l-4`} style={{ borderLeftColor: stats.riskRatio > 70 ? '#f43f5e' : '#10b981' }}>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
-                        <ShieldCheck size={14} className="text-amber-500" /> IRP 안전자산 30% 의무
+                        <ShieldCheck size={14} className="text-amber-500" /> {activeAccount === "irp" ? "개인IRP" : "DC형"} 안전자산 30% 의무
                       </span>
-                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>위험자산 {stats.riskRatio.toFixed(1)}%</span>
+                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>규정용 위험자산 {stats.riskRatio.toFixed(1)}%</span>
                     </div>
                     <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex">
                       <div style={{ width: `${Math.min(70, stats.riskRatio)}%` }} className="bg-rose-400 h-full" />
@@ -842,6 +1109,16 @@
                       <div className="flex-1 bg-emerald-400 h-full" />
                     </div>
                     {stats.riskRatio > 70 && <p className="mt-2 text-[10px] text-rose-500 font-bold">⚠️ 규정 위반: 안전자산 매수가 시급합니다.</p>}
+                    
+                    {/* 실질 주식 노출 비중 */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
+                        <TrendingUp size={13} className="text-blue-400" /> 실질 주식 노출
+                      </span>
+                      <span className="text-xs font-black text-blue-500">
+                        {stats.equityExposureRatio.toFixed(1)}%
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -918,7 +1195,7 @@
                 </div>
 
                 {activeHasTarget ? (
-                  <>
+                  <React.Fragment>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <DonutChart title="🎯 목표 비중" subtitle="설정된 자산배분 목표" data={curAcc.targetPortfolio} />
                       <DonutChart title="📊 현재 비중" subtitle="실시간 시장 가치 반영" data={buyLogic.currentPortfolio} />
@@ -995,7 +1272,7 @@
                           <p className="text-xs font-bold text-rose-500 mt-1">설정 탭에서 목표 비중을 확인해주세요.</p>
                         </div>
                       ) : (
-                        <>
+                        <React.Fragment>
                           <div className="mb-6 space-y-2">
                             <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 입금 예정액 (₩)</label>
                             <div className="relative">
@@ -1035,12 +1312,12 @@
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
                             <p className="text-[11px] text-slate-500 font-bold leading-relaxed">잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 무리하게 매수하지 말고 이월하세요.</p>
                           </div>
-                        </>
+                        </React.Fragment>
                       )}
                     </div>
-                  </>
+                  </React.Fragment>
                 ) : (
-                  <>
+                  <React.Fragment>
                     <DonutChart title="📊 현재 보유 비중" subtitle="보유 종목 평가금액 기준" data={stats.currentHoldingsChartData} />
                     <div className={`${cardBase} p-6`}>
                       <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl mb-4">
@@ -1055,7 +1332,7 @@
                         ))}
                       </div>
                     </div>
-                  </>
+                  </React.Fragment>
                 )}
               </div>
             )}
@@ -1140,22 +1417,87 @@
                               )}
                             </div>
 
-                            {/* IRP 자산 유형 */}
-                            {activeAccount === "irp" && (
-                              <div className="col-span-2">
-                                <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
-                                  IRP 자산 유형
-                                  <Tip text={"IRP는 법적으로 위험자산 비중이 70%를 초과할 수 없습니다.\n\n• 위험자산: 주식형 파생 ETF (국내/해외 주식 등)\n• 안전자산: 채권형 ETF, 단기채, MMF 등\n\n70% 초과 시 대시보드에 경고가 표시됩니다."} />
-                                </label>
-                                <div className="flex gap-2">
-                                  {['위험자산', '안전자산'].map(type => (
-                                    <button key={type} onClick={() => chAsset(asset.id, "assetType", type)}
-                                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${asset.assetType === type ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>
-                                      {type}
+                            {/* 혼합 자산군(주식+채권) 비중 슬라이더 */}
+                            {MIXED_ASSET_CATEGORIES.includes(asset.category) && (
+                              <div className="col-span-2 mt-1 p-4 bg-white border border-purple-100 rounded-xl shadow-sm">
+                                {/* 헤더 */}
+                                <div className="flex justify-between items-center mb-3">
+                                  <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                                    <SlidersHorizontal size={12} className="text-purple-500" /> 내부 주식/채권 비중 (참고용)
+                                  </span>
+                                  <span className="text-[10px] font-black bg-purple-50 text-purple-700 px-2 py-1 rounded-lg">
+                                    주식 {asset.stockRatio ?? 30}% / 채권 {100 - (asset.stockRatio ?? 30)}%
+                                  </span>
+                                </div>
+
+                                {/* 시각적 비중 바 */}
+                                <div className="flex rounded-lg overflow-hidden h-5 mb-3 text-[10px] font-black">
+                                  <div style={{ width: `${asset.stockRatio ?? 30}%`, background: '#3b82f6' }}
+                                    className="flex items-center justify-center text-white transition-all duration-200">
+                                    {(asset.stockRatio ?? 30) >= 20 && `주식 ${asset.stockRatio ?? 30}%`}
+                                  </div>
+                                  <div style={{ width: `${100 - (asset.stockRatio ?? 30)}%`, background: '#8b5cf6' }}
+                                    className="flex items-center justify-center text-white transition-all duration-200">
+                                    {(100 - (asset.stockRatio ?? 30)) >= 20 && `채권 ${100 - (asset.stockRatio ?? 30)}%`}
+                                  </div>
+                                </div>
+
+                                {/* 슬라이더 */}
+                                <input
+                                  type="range" min="0" max="100" step="5"
+                                  value={asset.stockRatio ?? 30}
+                                  onChange={e => chAsset(asset.id, "stockRatio", Number(e.target.value))}
+                                  className="w-full custom-slider mb-3"
+                                />
+
+                                {/* 빠른 선택 버튼 */}
+                                <div className="flex gap-2 mb-3">
+                                  {[20, 30, 40, 50].map(v => (
+                                    <button key={v} type="button"
+                                      onClick={() => chAsset(asset.id, "stockRatio", v)}
+                                      className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg border transition-all ${
+                                        (asset.stockRatio ?? 30) === v
+                                          ? 'bg-purple-500 text-white border-purple-500'
+                                          : 'bg-slate-50 text-slate-600 border-slate-200'
+                                      }`}>
+                                      {v}/{100-v}
                                     </button>
                                   ))}
                                 </div>
+
+                                {/* 안내 문구 */}
+                                <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
+                                  ℹ️ 혼합 자산은 설정한 <strong>주식 비중</strong>이 IRP/DC 위험자산 계산에 직접 반영됩니다.
+                                </p>
                               </div>
+                            )}
+
+                            {/* IRP 자산 유형 */}
+                            {(activeAccount === "irp" || activeAccount === "dcIrp") && (
+                              MIXED_ASSET_CATEGORIES.includes(asset.category) ? (
+                                <div className="col-span-2 text-[10px] text-purple-500 font-bold bg-purple-50 rounded-xl px-3 py-2 border border-purple-100">
+                                  ℹ️ 혼합자산은 내부 주식비중(stockRatio) 기준으로 위험/안전이 자동 분리됩니다.
+                                </div>
+                              ) : asset.category === "현금/단기채" ? (
+                                <div className="col-span-2 text-[10px] text-slate-400 font-bold bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+                                  ℹ️ 현금/단기채는 규정상 안전자산으로 자동 처리됩니다.
+                                </div>
+                              ) : (
+                                <div className="col-span-2">
+                                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
+                                    {activeAccount === "irp" ? "개인IRP" : "DC형"} 자산 유형
+                                    <Tip text={"퇴직연금계좌(IRP/DC)는 법적으로 위험자산 비중이 70%를 초과할 수 없습니다.\n\n• 위험자산: 주식형 파생 ETF (국내/해외 주식 등)\n• 안전자산: 채권형 ETF, 단기채, MMF 등\n\n70% 초과 시 대시보드에 경고가 표시됩니다."} />
+                                  </label>
+                                  <div className="flex gap-2">
+                                    {['위험자산', '안전자산'].map(type => (
+                                      <button key={type} onClick={() => chAsset(asset.id, "assetType", type)}
+                                        className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${asset.assetType === type ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>
+                                        {type}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
                             )}
 
                             <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">수량</label><input type="number" value={asset.quantity === 0 ? "" : asset.quantity} onChange={e => chAsset(asset.id, "quantity", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
@@ -1185,30 +1527,58 @@
                 <div className={`${cardBase} overflow-hidden`}>
                   <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
                     <h3 className="text-base font-black text-slate-800 flex items-center gap-2"><Wallet size={18} className="text-slate-400" /> 올해 납입 내역</h3>
-                    <button onClick={() => { const id = Date.now(); updateAcc({ contributions: [...curAcc.contributions, { id, month: `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, amount: 0, type: "입금", memo: "" }] }); setExpandedContrib(id); }}
+                    <button onClick={() => { 
+                      const id = Date.now(); 
+                      const defaultType = activeAccount === "dcIrp" ? "회사부담금" : "입금";
+                      updateAcc({ contributions: [...curAcc.contributions, { id, month: `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, amount: 0, type: defaultType, memo: "" }] }); 
+                      setExpandedContrib(id); 
+                    }}
                       className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-all">추가</button>
                   </div>
                   <div className="divide-y divide-slate-100">
                     {curAcc.contributions.length === 0 && <div className="py-12 text-center text-slate-400 text-sm font-bold">내역이 없습니다.</div>}
-                    {[...curAcc.contributions].sort((a, b) => b.month.localeCompare(a.month)).map(item => (
-                      <div key={item.id}>
-                        <button onClick={() => setExpandedContrib(expandedContrib === item.id ? null : item.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
-                          <span className={`px-2 py-1.5 rounded-lg text-[10px] font-black border ${item.type === '배당' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>{item.type}</span>
-                          <div className="flex-1 min-w-0"><p className="text-sm font-black text-slate-800">{item.month}</p><p className="text-[10px] text-slate-400 font-bold truncate">{item.memo || "설명 없음"}</p></div>
-                          <p className="text-sm font-black text-slate-900">₩{fmt(item.amount)}</p>
-                          <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ${expandedContrib === item.id ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
-                        </button>
-                        {expandedContrib === item.id && (
-                          <div className="p-5 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 shadow-inner">
-                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">연월</label><input type="month" value={item.month} onChange={e => chContrib(item.id, "month", e.target.value)} className={inpBase} /></div>
-                            <div><label className="block text-[10px] font-bold text-slate-400 mb-1">유형</label><select value={item.type} onChange={e => chContrib(item.id, "type", e.target.value)} className={inpBase}><option value="입금">입금</option><option value="배당">배당</option></select></div>
-                            <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">금액 (₩)</label><input type="number" value={item.amount === 0 ? "" : item.amount} onChange={e => chContrib(item.id, "amount", Number(e.target.value))} className={`${inpBase} text-right font-black text-base`} /></div>
-                            <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1">설명</label><input type="text" value={item.memo} placeholder="설명 입력" onChange={e => chContrib(item.id, "memo", e.target.value)} className={inpBase} /></div>
-                            <button onClick={() => updateAcc({ contributions: curAcc.contributions.filter(c => c.id !== item.id) })} className="col-span-2 py-3 text-rose-500 bg-rose-50 rounded-xl text-xs font-bold border border-rose-100">삭제하기</button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    {[...curAcc.contributions].sort((a, b) => b.month.localeCompare(a.month)).map(item => {
+                      let typeColor = 'bg-slate-100 text-slate-700 border-slate-200';
+                      if (item.type === '배당') typeColor = 'bg-amber-50 text-amber-700 border-amber-200';
+                      else if (item.type === '회사부담금') typeColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                      else if (item.type === '개인추가납입') typeColor = 'bg-indigo-50 text-indigo-700 border-indigo-200';
+
+                      return (
+                        <div key={item.id}>
+                          <button onClick={() => setExpandedContrib(expandedContrib === item.id ? null : item.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
+                            <span className={`px-2 py-1.5 rounded-lg text-[10px] font-black border ${typeColor}`}>{item.type}</span>
+                            <div className="flex-1 min-w-0"><p className="text-sm font-black text-slate-800">{item.month}</p><p className="text-[10px] text-slate-400 font-bold truncate">{item.memo || "설명 없음"}</p></div>
+                            <p className="text-sm font-black text-slate-900">₩{fmt(item.amount)}</p>
+                            <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ${expandedContrib === item.id ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
+                          </button>
+                          {expandedContrib === item.id && (
+                            <div className="p-5 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 shadow-inner">
+                              <div><label className="block text-[10px] font-bold text-slate-400 mb-1">연월</label><input type="month" value={item.month} onChange={e => chContrib(item.id, "month", e.target.value)} className={inpBase} /></div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 mb-1">유형</label>
+                                <select value={item.type} onChange={e => chContrib(item.id, "type", e.target.value)} className={inpBase}>
+                                  {activeAccount === "dcIrp" ? (
+                                    <React.Fragment>
+                                      <option value="회사부담금">회사부담금</option>
+                                      <option value="개인추가납입">개인추가납입</option>
+                                      <option value="배당">배당</option>
+                                    </React.Fragment>
+                                  ) : (
+                                    <React.Fragment>
+                                      <option value="입금">입금</option>
+                                      <option value="배당">배당</option>
+                                    </React.Fragment>
+                                  )}
+                                </select>
+                              </div>
+                              <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">금액 (₩)</label><input type="number" value={item.amount === 0 ? "" : item.amount} onChange={e => chContrib(item.id, "amount", Number(e.target.value))} className={`${inpBase} text-right font-black text-base`} /></div>
+                              <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1">설명</label><input type="text" value={item.memo} placeholder="설명 입력" onChange={e => chContrib(item.id, "memo", e.target.value)} className={inpBase} /></div>
+                              <button onClick={() => updateAcc({ contributions: curAcc.contributions.filter(c => c.id !== item.id) })} className="col-span-2 py-3 text-rose-500 bg-rose-50 rounded-xl text-xs font-bold border border-rose-100">삭제하기</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -1218,7 +1588,7 @@
                     <div className="text-left flex-1">
                       <div className="flex items-center gap-1.5 mb-1">
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">과거 누적 합계</p>
-                        <Tip text={"연도 마감 기능으로 이월된 과거 데이터입니다.\n\n• 원금: 해당 연도에 직접 입금한 금액 합계\n• 배당: 해당 연도에 받은 분배금 합계\n\n수기로 직접 수정할 수 있으며, 전체 손익 계산에 반영됩니다."} />
+                        <Tip text={"연도 마감 기능으로 이월된 과거 데이터입니다.\n\n• 원금: 해당 연도에 직접 입금한 금액 합계\n• 배당: 해당 연도에 받은 분배금 합계\n\n수기로 직접 수정할 수 편집할 수 있으며, 전체 손익 계산에 반영됩니다."} />
                       </div>
                       <p className="text-base font-black text-slate-800">원금 ₩{fmt(stats.purePrincipal - stats.yearCash)}<span className="text-amber-500 text-xs ml-2">+ 배당 ₩{fmt(stats.totalDividend)}</span></p>
                     </div>
@@ -1261,6 +1631,24 @@
                   </div>
                 )}
 
+                {activeAccount === "dcIrp" && (
+                  <div className={`${cardBase} p-6 space-y-4`}>
+                    <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Settings size={16} className="text-orange-500" /> 퇴직IRP (DC형) 상세 설정</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col pr-4">
+                        <span className="text-sm font-bold text-slate-700 mb-0.5">개인 추가 납입액 세액공제 적용</span>
+                        <span className="text-[10px] text-slate-400">통합리포트의 '연말정산 예상 세액공제 환급금' 계산 시 포함됩니다.</span>
+                      </div>
+                      <button
+                        onClick={() => updateAcc({ taxCreditEligible: !curAcc.taxCreditEligible })}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${curAcc.taxCreditEligible ? 'bg-orange-500' : 'bg-slate-200'}`}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${curAcc.taxCreditEligible ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {activeAccount === "isa" && (
                   <div className={`${cardBase} p-6 space-y-4`}>
                     <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Settings size={16} className="text-emerald-500" /> ISA 상세 설정</p>
@@ -1294,15 +1682,12 @@
                           {activeAccount === "pension1" ? (
                             <p className="text-[10px] font-bold text-slate-500">{t.name}</p>
                           ) : (
-                            <input type="text" value={t.name}
-                              onChange={e => {
-                                const oldName = t.name; const newName = e.target.value;
-                                updateAcc({ targetPortfolio: curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, name: newName } : item), assets: curAcc.assets.map(a => a.category === oldName ? { ...a, category: newName } : a) });
-                              }}
-                              className="w-full bg-transparent text-[10px] font-bold text-slate-700 outline-none border-b border-slate-200 focus:border-slate-400 py-0.5" />
+                            <div className="flex-1 min-w-0 pr-2">
+                               <TargetCategorySelector t={t} i={i} curAcc={curAcc} updateAcc={updateAcc} />
+                            </div>
                           )}
                           {activeAccount !== "pension1" && (
-                            <button onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })} className="text-rose-400 hover:text-rose-600 p-0.5 ml-1"><Trash2 size={12} /></button>
+                            <button onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })} className="text-rose-400 hover:text-rose-600 p-0.5 ml-1 flex-shrink-0"><Trash2 size={12} /></button>
                           )}
                         </div>
                         <div className="flex items-center gap-1 ml-1">
@@ -1356,6 +1741,7 @@
                 <div className={`${cardBase} p-6 space-y-4`}>
                   <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><User size={16} /> 공통 계정 설정</p>
                   <div><label className="block text-[10px] font-bold text-slate-400 mb-1">사용자 이름</label><input type="text" value={global.userName} onChange={e => setGlobal({ ...global, userName: e.target.value })} className={inpBase} /></div>
+                  
                   <div>
                     <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-2 uppercase">
                       급여 구간 (세액공제율 산정용)
@@ -1459,7 +1845,7 @@
                     );
                   })}
                   {buyLogic.fullRebalancePlan.length > 0 && (
-                    <>
+                    <React.Fragment>
                       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-[11px] text-amber-800 shadow-sm mt-4">
                         <p className="font-bold flex items-center gap-1.5 mb-2"><Info size={14} /> 리밸런싱 세금 참고사항</p>
                         <ul className="list-disc pl-4 space-y-1 opacity-90">
@@ -1476,7 +1862,7 @@
                           <span className="text-lg font-black text-blue-600">₩{fmt(Math.round(buyLogic.totalSellAmt - buyLogic.fee))}</span>
                         </div>
                       </div>
-                    </>
+                    </React.Fragment>
                   )}
                 </div>
                 <div className="p-4 sm:p-6 border-t border-slate-100 bg-white">
@@ -1495,4 +1881,3 @@
   </script>
 </body>
 </html>
-
