@@ -104,8 +104,6 @@
       "국내채권":    "안전자산",
       "글로벌채권":  "안전자산",
       "현금/단기채": "안전자산",
-      // "주식+채권"은 혼합자산이므로 포함하지 않음
-      // 직접입력은 포함하지 않음 → 기본값 "위험자산" 유지
     };
 
     const PENSION1_DEFAULT_TARGET = [
@@ -115,7 +113,6 @@
       { name: "금", value: 22, color: "#f59e0b" },
     ];
 
-    // 1. 하위호환성을 위한 dcIrp 초기 객체 및 정규화 함수 (샘플 데이터 추가)
     const createDefaultDcIrp = () => ({
       limit: 0, color: "#f97316", label: "퇴직IRP (DC형)",
       rebalanceMonth: 7, rebalanceDay: 15, monthlyInput: 200000,
@@ -128,7 +125,7 @@
       assets: [
         { id: 1, category: "미국주식",   name: "KODEX 미국나스닥100",        code: "379810", quantity: 66,  price: 21100, currentPrice: 23855, assetType: "위험자산" },
         { id: 2, category: "주식+채권",  name: "TIGER 미국나스닥100채권혼합Fn", code: "435420", quantity: 45,  price: 12000, currentPrice: 13130, stockRatio: 40 },
-        { id: 3, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 60,  price: 10200, currentPrice: 10250, assetType: "안전자산" },
+        { id: 3, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 60,  price: 10200, currentPrice: 10250, assetType: "안전자산", parkingAsset: true },
       ], 
       contributions: [
         { id: 1, month: "2026-01", amount: 300000, type: "회사부담금", memo: "정기 회사부담금" },
@@ -152,10 +149,14 @@
       Object.keys(next).forEach(accKey => {
         if (next[accKey].assets) {
           next[accKey].assets = next[accKey].assets.map(asset => {
-            if (MIXED_ASSET_CATEGORIES.includes(asset.category) && asset.stockRatio === undefined) {
-              return { ...asset, stockRatio: 30 };
+            const updated = { ...asset };
+            if (updated.parkingAsset === undefined) {
+              updated.parkingAsset = false;
             }
-            return asset;
+            if (MIXED_ASSET_CATEGORIES.includes(updated.category) && updated.stockRatio === undefined) {
+              updated.stockRatio = 30;
+            }
+            return updated;
           });
         }
       });
@@ -163,11 +164,13 @@
       return next;
     };
 
-    const getAssetMarketValue = (a) =>
-      a.quantity * (a.currentPrice || a.price);
+    // 파킹형 자산 및 분리 계산용 Helper 함수
+    const isParkingAsset = (a) => Boolean(a.parkingAsset);
+    const getAssetMarketValue = (a) => (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
+    const getParkingAssetValue = (assets) => assets.filter(isParkingAsset).reduce((sum, a) => sum + getAssetMarketValue(a), 0);
+    const getAllocationAssets = (assets) => assets.filter(a => !isParkingAsset(a));
+    const getAllocationBaseValue = (assets) => getAllocationAssets(assets).reduce((sum, a) => sum + getAssetMarketValue(a), 0);
 
-    // 규정용 위험자산 가중치 (0~1)
-    // 혼합자산: stockRatio/100, 위험자산: 1.0, 그 외: 0.0
     const getRiskWeight = (a) => {
       if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
         return (a.stockRatio ?? 30) / 100;
@@ -176,8 +179,6 @@
       return 0.0;
     };
 
-    // 실질 주식 노출 가중치 (0~1)
-    // getRiskWeight와 현재 동일하나 향후 기준 분리 가능성을 위해 별도 유지
     const getEquityExposureWeight = (a) => {
       if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
         return (a.stockRatio ?? 30) / 100;
@@ -347,27 +348,27 @@
         
         const updates = { category: preset.label };
 
-        // 자산군 선택 시 assetType 자동 세팅
         if (CATEGORY_ASSET_TYPE[preset.label]) {
           updates.assetType = CATEGORY_ASSET_TYPE[preset.label];
         }
-
-        // 혼합자산 stockRatio 기본값
         if (MIXED_ASSET_CATEGORIES.includes(preset.label) && asset.stockRatio === undefined) {
           updates.stockRatio = 30;
         }
         
+        const isExist = curAcc.targetPortfolio.some(
+          t => t.name.trim().toLowerCase() === preset.label.toLowerCase()
+        );
+
         updateAcc({
-           assets: curAcc.assets.map(a => a.id === asset.id ? { ...a, ...updates } : a)
+          assets: curAcc.assets.map(a => a.id === asset.id ? { ...a, ...updates } : a),
+          ...(isExist ? {} : {
+            targetPortfolio: [...curAcc.targetPortfolio, { name: preset.label, value: 0, color: preset.color }]
+          })
         });
-        
-        setShowPreset(false); setCustomMode(false);
-        
-        const isExist = curAcc.targetPortfolio.some(t => t.name.trim().toLowerCase() === preset.label.toLowerCase());
-        if (!isExist) {
-          updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: preset.label, value: 0, color: preset.color }] });
-          showMsg("success", `"${preset.label}" 자산군이 목표 비중에 자동 등록되었습니다.`);
-        }
+
+        if (!isExist) showMsg("success", `"${preset.label}" 자산군이 목표 비중에 자동 등록되었습니다.`);
+        setShowPreset(false);
+        setCustomMode(false);
       };
 
       if (customMode) {
@@ -438,6 +439,7 @@
       const [dDay, setDDay] = useState(0);
       const [global, setGlobal] = useState({ userName: "김투자", incomeLevel: "5500이하" });
       const [confirmReset, setConfirmReset] = useState(false);
+      const [parkingDeployRatio, setParkingDeployRatio] = useState(0); // 파킹 자산 활용 비율 상태 추가
 
       const [accounts, setAccounts] = useState({
         pension1: {
@@ -513,6 +515,7 @@
         setExpandedAsset(null);
         setExpandedContrib(null);
         setPastOpen(false);
+        setParkingDeployRatio(0); // 계좌 변경 시 파킹 사용 비율 리셋
       }, [activeAccount]);
 
       const isInitialMountTab = useRef(true);
@@ -565,8 +568,11 @@
       }, [activeAccount, accounts, curAcc.rebalanceMonth, curAcc.rebalanceDay, rebalanceYear]);
 
       const calcAccStats = (acc) => {
-        const totalCurrentValue = acc.assets.reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
-        const totalBookValue = acc.assets.reduce((s, a) => s + (a.quantity * a.price), 0);
+        const allocationBaseValue = getAllocationBaseValue(acc.assets);
+        const parkingValue = getParkingAssetValue(acc.assets);
+        const totalCurrentValue = acc.assets.reduce((s, a) => s + getAssetMarketValue(a), 0);
+        const totalBookValue = acc.assets.reduce((s, a) => s + ((Number(a.quantity) || 0) * (Number(a.price) || 0)), 0);
+        
         const prevPrincipal = acc.pastContributions.reduce((s, p) => s + (Number(p.amount) || 0), 0);
         const prevDividend = acc.pastContributions.reduce((s, p) => s + (Number(p.dividend) || 0), 0);
         const activeCash = acc.contributions.filter(c => c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
@@ -580,10 +586,12 @@
         const purePrincipal = prevPrincipal + activeCash;
         const totalDividend = prevDividend + activeDividend;
         const capitalGain = totalCurrentValue - (purePrincipal + totalDividend);
+        
         const bookReturnAmt = totalCurrentValue - totalBookValue;
         const bookReturnRate = totalBookValue > 0 ? (bookReturnAmt / totalBookValue) * 100 : 0;
         const principalReturnAmt = totalCurrentValue - purePrincipal;
         const principalReturnRate = purePrincipal > 0 ? (principalReturnAmt / purePrincipal) * 100 : 0;
+        
         const pctP = totalCurrentValue > 0 ? (purePrincipal / totalCurrentValue) * 100 : 0;
         const pctD = totalCurrentValue > 0 ? (totalDividend / totalCurrentValue) * 100 : 0;
         const pctG = (totalCurrentValue > 0 && capitalGain > 0) ? (capitalGain / totalCurrentValue) * 100 : 0;
@@ -597,18 +605,27 @@
         
         const accHasTarget = acc.targetPortfolio && acc.targetPortfolio.length > 0 && acc.targetPortfolio.some(t => t.value > 0);
         const currentHoldingsChartData = [];
-        if (!accHasTarget && totalCurrentValue > 0) {
-          const grouped = acc.assets.reduce((grp, a) => {
+        
+        if (!accHasTarget && allocationBaseValue > 0) {
+          const allocAssets = getAllocationAssets(acc.assets);
+          const grouped = allocAssets.reduce((grp, a) => {
             const cat = a.category || a.name || '미분류';
             if (!grp[cat]) grp[cat] = { name: cat, totalValue: 0, color: '#94a3b8' };
-            grp[cat].totalValue += (a.quantity * (a.currentPrice || a.price));
+            grp[cat].totalValue += getAssetMarketValue(a);
             const tColor = (acc.targetPortfolio.find(t => t.name === cat) || {}).color;
             if (tColor) grp[cat].color = tColor;
             return grp;
           }, {});
-          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / totalCurrentValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
+          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / allocationBaseValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
         }
-        return { totalCurrentValue, totalBookValue, purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, employerCash, personalCash };
+        
+        return { 
+          totalCurrentValue, allocationBaseValue, parkingValue, totalBookValue, 
+          purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, 
+          principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, 
+          riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, 
+          employerCash, personalCash 
+        };
       };
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
@@ -644,31 +661,94 @@
         const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
         const invalidTarget = activeAccount !== "report" && targetSum !== 100;
 
-        if (!activeHasTarget || invalidTarget) return { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: totalInvestableCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget };
+        if (!activeHasTarget || invalidTarget) return { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: totalInvestableCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: totalInvestableCash };
 
-        const vt = stats.totalCurrentValue + totalInvestableCash; let cash = totalInvestableCash; const orders = [];
-        const currentPortfolio = curAcc.targetPortfolio.map(t => {
-          const cv = curAcc.assets.filter(a => a.category === t.name).reduce((s, a) => s + (a.quantity * (a.currentPrice || a.price)), 0);
-          const w = stats.totalCurrentValue > 0 ? (cv / stats.totalCurrentValue) * 100 : 0;
+        // 1. 기준 금액 분리 계산
+        const allocationBaseValue = stats.allocationBaseValue || 0;
+        const parkingValue = stats.parkingValue || 0;
+        
+        // 2. 매수 재원에 파킹 자산 포함 (사용자 설정 비율)
+        const deployParkingCash = Math.floor(parkingValue * (parkingDeployRatio / 100));
+        const deployCash = totalInvestableCash + deployParkingCash;
+        
+        // 리밸런싱 타겟: 투자자산 + 파킹매도분
+        const rebalanceTargetValue = allocationBaseValue + deployParkingCash;
+        // Buy-only 타겟: 투자자산 + 현금투입액 + 파킹매도분
+        const targetBaseAfterBuy = allocationBaseValue + deployCash;
+
+        // 4. 파킹용 현금/단기채 목표 비중 제외
+        const activeTargetPortfolio = curAcc.targetPortfolio.filter(t => {
+          // 파킹 자산만 있는 "현금/단기채" 항목만 목표비중에서 제외
+          // 다른 자산군은 파킹 여부와 무관하게 목표비중 유지
+          if (t.name === "현금/단기채") {
+            return curAcc.assets.some(a => !a.parkingAsset && a.category === t.name);
+          }
+          return true;
+        });
+
+        // 현재 투자 포트폴리오 비중
+        const currentPortfolio = activeTargetPortfolio.map(t => {
+          const cv = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name).reduce((s, a) => s + getAssetMarketValue(a), 0);
+          const w = allocationBaseValue > 0 ? (cv / allocationBaseValue) * 100 : 0;
           return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: Number(t.value) || 0 };
         });
         
-        const fullRebalancePlan = currentPortfolio.map(p => {
-          const pa = curAcc.assets.find(a => a.category === p.name);
+        // 일반 리밸런싱 플랜
+        const normalRebalancePlan = currentPortfolio.map(p => {
+          const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === p.name);
           const cp = pa ? (pa.currentPrice || pa.price) : 0;
           const ap = pa ? pa.price : 0;
-          const diff = stats.totalCurrentValue * (p.targetWeight / 100) - p.categoryValue;
+          const diff = rebalanceTargetValue * (p.targetWeight / 100) - p.categoryValue;
           const shares = cp > 0 ? Math.round(diff / cp) : 0;
           const profit = shares < 0 ? Math.abs(shares) * (cp - ap) : 0;
-          return { name: p.name, assetName: pa ? pa.name : p.name, currentWeight: p.value, targetWeight: p.targetWeight, shares, currentPrice: cp, profit };
+          return { name: p.name, assetName: pa ? pa.name : p.name, currentWeight: p.value, targetWeight: p.targetWeight, shares, currentPrice: cp, profit, isParkingLiquidation: false };
         }).filter(x => x.shares !== 0).sort((a, b) => a.shares - b.shares);
+
+        // 3. 파킹 자산 매도 주문 생성
+        const generatedParkingSellOrders = [];
+        let remainToSell = deployParkingCash;
+        if (remainToSell > 0) {
+          const parkingAssets = curAcc.assets.filter(a => a.parkingAsset);
+          for (const p of parkingAssets) {
+            if (remainToSell <= 0) break;
+            const cp = p.currentPrice || p.price || 0;
+            if (cp <= 0) continue;
+            
+            const sellShares = Math.min(p.quantity, Math.ceil(remainToSell / cp));
+            if (sellShares > 0) {
+              const sellAmt = sellShares * cp;
+              generatedParkingSellOrders.push({
+                name: p.category || "파킹자산",
+                assetName: p.name,
+                shares: -sellShares,
+                currentPrice: cp,
+                currentWeight: 0,
+                targetWeight: 0,
+                profit: 0,
+                isParkingLiquidation: true
+              });
+              remainToSell -= sellAmt;
+            }
+          }
+        }
+
+        // 전체 리밸런싱 플랜 병합 (파킹 매도가 맨 위로 오도록)
+        const fullRebalancePlan = [
+          ...generatedParkingSellOrders,
+          ...normalRebalancePlan
+        ];
+        
         const totalSellAmt = fullRebalancePlan.filter(x => x.shares < 0).reduce((s, x) => s + Math.abs(x.shares * x.currentPrice), 0);
         const fee = totalSellAmt * 0.002;
         
-        currentPortfolio.filter(d => (vt * (d.targetWeight / 100) - d.categoryValue) > 0).sort((a, b) => (vt * (b.targetWeight / 100) - b.categoryValue) - (vt * (a.targetWeight / 100) - a.categoryValue))
+        // Buy-only 로직 (cash 소비)
+        let cash = deployCash; 
+        const orders = [];
+        
+        currentPortfolio.filter(d => (targetBaseAfterBuy * (d.targetWeight / 100) - d.categoryValue) > 0).sort((a, b) => (targetBaseAfterBuy * (b.targetWeight / 100) - b.categoryValue) - (targetBaseAfterBuy * (a.targetWeight / 100) - a.categoryValue))
           .forEach(item => {
-            const pa = curAcc.assets.find(a => a.category === item.name); const cp = pa ? (pa.currentPrice || pa.price) : 0;
-            const deficit = vt * (item.targetWeight / 100) - item.categoryValue;
+            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name); const cp = pa ? (pa.currentPrice || pa.price) : 0;
+            const deficit = targetBaseAfterBuy * (item.targetWeight / 100) - item.categoryValue;
             if (cash >= cp && cp > 0) { const n = Math.min(Math.floor(cash / cp), Math.ceil(deficit / cp)); if (n > 0) { orders.push({ name: item.name, assetName: pa ? pa.name : item.name, shares: n, cost: n * cp, deficit }); cash -= n * cp; } }
           });
 
@@ -676,11 +756,11 @@
         while (keepBuying && cash > 0) {
           keepBuying = false;
           const remainingDeficits = currentPortfolio.map(item => {
-            const pa = curAcc.assets.find(a => a.category === item.name);
+            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name);
             const cp = pa ? (pa.currentPrice || pa.price) : 0;
             const order = orders.find(o => o.name === item.name);
             const orderCost = order ? order.cost : 0;
-            const currentDeficit = (vt * (item.targetWeight / 100)) - (item.categoryValue + orderCost);
+            const currentDeficit = (targetBaseAfterBuy * (item.targetWeight / 100)) - (item.categoryValue + orderCost);
             return { name: item.name, assetName: pa ? pa.name : item.name, cp, currentDeficit };
           }).filter(x => x.currentDeficit > 0 && cash >= x.cp && x.cp > 0).sort((a, b) => b.currentDeficit - a.currentDeficit);
 
@@ -710,7 +790,7 @@
 
         const tempDeviation = currentPortfolio.map(p => {
           const gap = p.value - p.targetWeight;
-          const deficitAmount = (stats.totalCurrentValue * (p.targetWeight / 100)) - p.categoryValue;
+          const deficitAmount = (allocationBaseValue * (p.targetWeight / 100)) - p.categoryValue;
           return { name: p.name, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
         });
 
@@ -723,8 +803,9 @@
           return { ...d, priority };
         });
 
-        return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: fullRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget };
-      }, [activeHasTarget, curAcc, stats.totalCurrentValue, totalInvestableCash, activeAccount]);
+        // buyLogic 반환 객체에 deployParkingCash 및 deployCash 추가 전달
+        return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: normalRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash };
+      }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio]);
 
       const chAsset = (id, f, v) => updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v } : a) });
       const chContrib = (id, f, v) => updateAcc({ contributions: curAcc.contributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
@@ -859,7 +940,7 @@
 
       const exportData = () => {
         const payload = {
-          schemaVersion: "1.0",
+          schemaVersion: "1.1",
           exportedAt: new Date().toISOString(),
           accounts,
           global
@@ -1274,7 +1355,7 @@
                       ) : (
                         <React.Fragment>
                           <div className="mb-6 space-y-2">
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 입금 예정액 (₩)</label>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 집행 예정액 (₩)</label>
                             <div className="relative">
                               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₩</span>
                               <input type="number" value={curAcc.monthlyInput === 0 ? "" : curAcc.monthlyInput} onChange={e => updateAcc({ monthlyInput: Number(e.target.value) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
@@ -1285,9 +1366,28 @@
                                 <span>+₩{fmt(stats.thisMonthDividend)}</span>
                               </div>
                             )}
-                            <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5 text-white">
+                            
+                            {/* 추가된 파킹 자산 활용 슬라이더 */}
+                            {stats.parkingValue > 0 && (
+                              <div className="mt-2 p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
+                                <div className="flex justify-between items-center mb-3">
+                                  <span className="text-[11px] font-bold text-indigo-800 flex items-center gap-1.5"><Archive size={14}/> 매수 대기(파킹) 자금 활용</span>
+                                  <span className="text-xs font-black text-indigo-700 bg-white px-2 py-1 rounded-lg shadow-sm">{parkingDeployRatio}%</span>
+                                </div>
+                                <input type="range" min="0" max="100" step="10" value={parkingDeployRatio} onChange={e => setParkingDeployRatio(Number(e.target.value))} 
+                                  className="w-full custom-slider mb-2" 
+                                  style={{ background: `linear-gradient(to right, #6366f1 0%, #6366f1 ${parkingDeployRatio}%, #e0e7ff ${parkingDeployRatio}%, #e0e7ff 100%)` }}
+                                />
+                                <div className="flex justify-between items-center">
+                                  <p className="text-[10px] text-indigo-600 font-medium">파킹 자산 매도액 합산</p>
+                                  <p className="text-xs font-bold text-indigo-700">+₩{fmt(buyLogic.deployParkingCash)}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5 text-white mt-2">
                               <span className="text-xs font-bold text-slate-300">총 매수 가능 예수금</span>
-                              <span className="text-base font-black">₩{fmt(totalInvestableCash)}</span>
+                              <span className="text-base font-black">₩{fmt(buyLogic.deployCash)}</span>
                             </div>
                           </div>
                           <p className="text-xs font-bold text-slate-400 uppercase mb-2">🛍️ 권장 매수 수량</p>
@@ -1349,7 +1449,7 @@
                     <button onClick={fetchAllPrices} disabled={isFetching} className="p-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all">
                       <RefreshCw size={16} className={isFetching ? "animate-spin" : ""} />
                     </button>
-                    <button onClick={() => { const id = Date.now(); updateAcc({ assets: [...curAcc.assets, { id, category: "", name: "", code: "", quantity: 0, price: 0, currentPrice: 0, assetType: "위험자산" }] }); setExpandedAsset(id); }}
+                    <button onClick={() => { const id = Date.now(); updateAcc({ assets: [...curAcc.assets, { id, category: "", name: "", code: "", quantity: 0, price: 0, currentPrice: 0, assetType: "위험자산", parkingAsset: false }] }); setExpandedAsset(id); }}
                       className="flex items-center gap-1 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold shadow-md active:scale-95 transition-all">
                       <Plus size={14} /> 추가
                     </button>
@@ -1370,7 +1470,10 @@
                         <button onClick={() => setExpandedAsset(isOpen ? null : asset.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[10px] shadow-sm flex-shrink-0" style={{ background: catColor }}>{(asset.category || "?").slice(0, 2)}</div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-black text-slate-800 truncate">{asset.name || "종목명 없음"}</p>
+                            <p className="text-sm font-black text-slate-800 truncate">
+                              {asset.parkingAsset && <span className="mr-1 text-amber-500 font-black text-[10px] bg-amber-50 px-1 py-0.5 rounded">파킹</span>}
+                              {asset.name || "종목명 없음"}
+                            </p>
                             <p className="text-[11px] text-slate-400 font-bold">{fmt(asset.quantity)}주 · ₩{fmt(asset.currentPrice || asset.price)}</p>
                           </div>
                           <div className="text-right"><p className="text-sm font-black text-slate-800">₩{fmt(cv)}</p><ReturnBadge amount={cv - ti} rate={pr} /></div>
@@ -1434,11 +1537,11 @@
                                 <div className="flex rounded-lg overflow-hidden h-5 mb-3 text-[10px] font-black">
                                   <div style={{ width: `${asset.stockRatio ?? 30}%`, background: '#3b82f6' }}
                                     className="flex items-center justify-center text-white transition-all duration-200">
-                                    {(asset.stockRatio ?? 30) >= 20 && `주식 ${asset.stockRatio ?? 30}%`}
+                                    {(asset.stockRatio ?? 30) >= 25 && `주식 ${asset.stockRatio ?? 30}%`}
                                   </div>
                                   <div style={{ width: `${100 - (asset.stockRatio ?? 30)}%`, background: '#8b5cf6' }}
                                     className="flex items-center justify-center text-white transition-all duration-200">
-                                    {(100 - (asset.stockRatio ?? 30)) >= 20 && `채권 ${100 - (asset.stockRatio ?? 30)}%`}
+                                    {(100 - (asset.stockRatio ?? 30)) >= 25 && `채권 ${100 - (asset.stockRatio ?? 30)}%`}
                                   </div>
                                 </div>
 
@@ -1448,6 +1551,9 @@
                                   value={asset.stockRatio ?? 30}
                                   onChange={e => chAsset(asset.id, "stockRatio", Number(e.target.value))}
                                   className="w-full custom-slider mb-3"
+                                  style={{
+                                    background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${asset.stockRatio ?? 30}%, #e2e8f0 ${asset.stockRatio ?? 30}%, #e2e8f0 100%)`
+                                  }}
                                 />
 
                                 {/* 빠른 선택 버튼 */}
@@ -1499,6 +1605,26 @@
                                 </div>
                               )
                             )}
+
+                            {/* 매수 대기 자금 (파킹) 토글 */}
+                            <div className="col-span-2">
+                              <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase">
+                                매수 대기 자금(파킹)
+                              </label>
+                              <button
+                                onClick={() => chAsset(asset.id, "parkingAsset", !asset.parkingAsset)}
+                                className={`w-full py-3 rounded-xl text-xs font-bold border transition-colors ${
+                                  asset.parkingAsset
+                                    ? "bg-amber-500 text-white border-amber-500 shadow-md"
+                                    : "bg-white text-slate-500 border-slate-200"
+                                }`}
+                              >
+                                {asset.parkingAsset ? "파킹 자산 포함됨" : "일반 투자자산"}
+                              </button>
+                              <p className="mt-2 text-[10px] text-slate-400 leading-relaxed">
+                                ℹ️ 총 평가 금액에는 포함되지만 목표비중, 현재비중, 리밸런싱, 매수도우미 계산에서는 제외됩니다.
+                              </p>
+                            </div>
 
                             <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">수량</label><input type="number" value={asset.quantity === 0 ? "" : asset.quantity} onChange={e => chAsset(asset.id, "quantity", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
                             <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">매입단가</label><input type="number" value={asset.price === 0 ? "" : asset.price} onChange={e => chAsset(asset.id, "price", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
@@ -1669,6 +1795,13 @@
 
                 <div className={`${cardBase} p-6`}>
                   <p className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2"><PieChart size={16} style={{ color: curAcc.color }} /> {curAcc.label} 목표 비중</p>
+                  {curAcc.targetPortfolio.some(t =>
+                    curAcc.assets.some(a => a.parkingAsset && a.category === t.name)
+                  ) && (
+                    <div className="mb-4 text-[10px] text-amber-700 bg-amber-50 rounded-xl px-3 py-2.5 border border-amber-200 font-bold leading-relaxed">
+                      ⚠️ 파킹 자산으로 설정된 항목이 목표비중에 포함되어 있습니다. 제외를 원하시면 해당 항목을 삭제해주세요.
+                    </div>
+                  )}
                   {curAcc.targetPortfolio.length === 0 && (
                     <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl mb-4 text-xs text-indigo-800 font-medium">
                       현재 자유형(비중 미설정)으로 작동 중입니다.<br />비중을 추가하시면 <strong>매수 도우미</strong>가 활성화됩니다.
@@ -1827,20 +1960,24 @@
                     <div className="text-center py-10 text-slate-400 text-sm font-bold border-2 border-dashed border-slate-200 rounded-2xl bg-white">현재 비중이 완벽합니다! 🎉</div>
                   ) : buyLogic.fullRebalancePlan.map((item, i) => {
                     const sell = item.shares < 0;
+                    const isParking = item.isParkingLiquidation;
                     return (
-                      <div key={i} className="rounded-2xl border p-4 shadow-sm bg-white" style={{ borderColor: sell ? '#bfdbfe' : '#fecdd3' }}>
+                      <div key={i} className={`rounded-2xl border p-4 shadow-sm ${isParking ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'}`} style={!isParking ? { borderColor: sell ? '#bfdbfe' : '#fecdd3' } : {}}>
                         <div className="flex justify-between gap-3 mb-3">
-                          <div className="min-w-0"><p className="text-[10px] font-bold text-slate-400">{item.name}</p><p className="text-sm font-bold text-slate-800 truncate">{item.assetName}</p></div>
-                          <span className="flex-shrink-0 text-sm font-black px-3 py-1.5 rounded-xl border" style={sell ? { background: '#eff6ff', color: '#1d4ed8', borderColor: '#dbeafe' } : { background: '#fff1f2', color: '#be123c', borderColor: '#fecdd3' }}>
-                            {sell ? "매도" : "매수"} {fmt(Math.abs(item.shares))}주
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold text-slate-400">{item.name}</p>
+                            <p className="text-sm font-bold text-slate-800 truncate">{item.assetName}</p>
+                          </div>
+                          <span className={`flex-shrink-0 text-sm font-black px-3 py-1.5 rounded-xl border ${isParking ? 'bg-amber-100 text-amber-700 border-amber-200' : sell ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                            {isParking ? "파킹 매도" : (sell ? "매도" : "매수")} {fmt(Math.abs(item.shares))}주
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-xs">
-                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">비중 조절</p><p className="font-bold text-slate-700">{item.currentWeight}% → {item.targetWeight}%</p></div>
-                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">현재가</p><p className="font-bold text-slate-700">₩{fmt(item.currentPrice)}</p></div>
-                          <div className="bg-slate-50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">예상금액</p><p className="font-black" style={{ color: sell ? '#2563eb' : '#e11d48' }}>{sell ? "-" : "+"}₩{fmt(Math.abs(item.shares * item.currentPrice))}</p></div>
+                          <div className="bg-white/50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">비중 조절</p><p className="font-bold text-slate-700">{isParking ? "재원 활용" : `${item.currentWeight}% → ${item.targetWeight}%`}</p></div>
+                          <div className="bg-white/50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">현재가</p><p className="font-bold text-slate-700">₩{fmt(item.currentPrice)}</p></div>
+                          <div className="bg-white/50 rounded-lg p-2.5 text-center"><p className="text-[10px] font-bold text-slate-400 mb-0.5">예상금액</p><p className="font-black" style={{ color: sell ? '#2563eb' : '#e11d48' }}>{sell ? "-" : "+"}₩{fmt(Math.abs(item.shares * item.currentPrice))}</p></div>
                         </div>
-                        {sell && item.profit > 0 && <div className="mt-2 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-lg px-3 py-2 border border-rose-100 inline-block">예상 실현 차익 (과세이연): +₩{fmt(item.profit)}</div>}
+                        {!isParking && sell && item.profit > 0 && <div className="mt-2 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-lg px-3 py-2 border border-rose-100 inline-block">예상 실현 차익 (과세이연): +₩{fmt(item.profit)}</div>}
                       </div>
                     );
                   })}
