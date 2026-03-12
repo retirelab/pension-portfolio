@@ -686,11 +686,18 @@
           return true;
         });
 
+        // 4-1. 파킹 제외 후 목표 비중 합계가 100이 안 될 수 있으므로 정규화
+        const activeTargetSum = activeTargetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0);
+        const normalizedTargetPortfolio = activeTargetPortfolio.map(t => ({
+          ...t,
+          normalizedValue: activeTargetSum > 0 ? Number(((t.value / activeTargetSum) * 100).toFixed(1)) : t.value
+        }));
+
         // 현재 투자 포트폴리오 비중
-        const currentPortfolio = activeTargetPortfolio.map(t => {
+        const currentPortfolio = normalizedTargetPortfolio.map(t => {
           const cv = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name).reduce((s, a) => s + getAssetMarketValue(a), 0);
           const w = allocationBaseValue > 0 ? (cv / allocationBaseValue) * 100 : 0;
-          return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: Number(t.value) || 0 };
+          return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: t.normalizedValue };
         });
         
         // 일반 리밸런싱 플랜
@@ -1278,7 +1285,7 @@
                 {activeHasTarget ? (
                   <React.Fragment>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <DonutChart title="🎯 목표 비중" subtitle="설정된 자산배분 목표" data={curAcc.targetPortfolio} />
+                      <DonutChart title="🎯 목표 비중" subtitle="설정된 자산배분 목표 (파킹 제외 반영)" data={buyLogic.currentPortfolio.map(p => ({ ...p, value: p.targetWeight }))} />
                       <DonutChart title="📊 현재 비중" subtitle="실시간 시장 가치 반영" data={buyLogic.currentPortfolio} />
                     </div>
 
@@ -1611,19 +1618,44 @@
                               <label className="block text-[10px] font-bold text-slate-400 mb-2 uppercase">
                                 매수 대기 자금(파킹)
                               </label>
-                              <button
-                                onClick={() => chAsset(asset.id, "parkingAsset", !asset.parkingAsset)}
-                                className={`w-full py-3 rounded-xl text-xs font-bold border transition-colors ${
-                                  asset.parkingAsset
-                                    ? "bg-amber-500 text-white border-amber-500 shadow-md"
-                                    : "bg-white text-slate-500 border-slate-200"
-                                }`}
-                              >
-                                {asset.parkingAsset ? "파킹 자산 포함됨" : "일반 투자자산"}
-                              </button>
-                              <p className="mt-2 text-[10px] text-slate-400 leading-relaxed">
-                                ℹ️ 총 평가 금액에는 포함되지만 목표비중, 현재비중, 리밸런싱, 매수도우미 계산에서는 제외됩니다.
-                              </p>
+
+                              {/* 비활성 상태: 설명 텍스트 + 버튼 */}
+                              {!asset.parkingAsset && (
+                                <div>
+                                  <p className="mb-2 text-[11px] text-slate-500 leading-relaxed bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+                                    💡 이 종목을 <strong>매수 대기(파킹) 자산</strong>으로 지정하면,
+                                    목표비중·리밸런싱·매수도우미 계산에서 제외됩니다.
+                                    단기채 등 대기 자금을 보관할 때 사용하세요.
+                                  </p>
+                                  <button
+                                    onClick={() => chAsset(asset.id, "parkingAsset", true)}
+                                    className="w-full py-3 rounded-xl text-xs font-bold border transition-colors bg-white text-slate-500 border-slate-200 hover:border-amber-300 hover:text-amber-600"
+                                  >
+                                    목표비중 제외하기 (파킹으로 지정)
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* 활성 상태: 파킹 뱃지 + 설명 + 해제 버튼 */}
+                              {asset.parkingAsset && (
+                                <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-amber-600 font-black text-xs bg-amber-100 px-2 py-1 rounded-lg">
+                                      🅿 파킹 자산으로 지정됨
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-amber-800 leading-relaxed">
+                                    ✅ 총 평가 금액에는 포함되지만,<br />
+                                    목표비중 · 현재비중 · 리밸런싱 · 매수도우미 계산에서는 <strong>제외</strong>됩니다.
+                                  </p>
+                                  <button
+                                    onClick={() => chAsset(asset.id, "parkingAsset", false)}
+                                    className="w-full py-2 rounded-xl text-[10px] font-bold border border-amber-300 text-amber-700 bg-white hover:bg-amber-100 transition-colors"
+                                  >
+                                    파킹 해제 (일반 투자자산으로 변경)
+                                  </button>
+                                </div>
+                              )}
                             </div>
 
                             <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">수량</label><input type="number" value={asset.quantity === 0 ? "" : asset.quantity} onChange={e => chAsset(asset.id, "quantity", Number(e.target.value))} className={`${inpBase} text-right`} /></div>
@@ -1804,31 +1836,56 @@
                   )}
                   {curAcc.targetPortfolio.length === 0 && (
                     <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl mb-4 text-xs text-indigo-800 font-medium">
-                      현재 자유형(비중 미설정)으로 작동 중입니다.<br />비중을 추가하시면 <strong>매수 도우미</strong>가 활성화됩니다.
+                      현재 자유형(비중 미설정) 작동 중입니다.<br />비중을 추가하시면 <strong>매수 도우미</strong>가 활성화됩니다.
                     </div>
                   )}
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {curAcc.targetPortfolio.map((t, i) => (
-                      <div key={i} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 relative overflow-hidden">
-                        <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: t.color }} />
-                        <div className="flex justify-between items-center mb-2 ml-1">
-                          {activeAccount === "pension1" ? (
-                            <p className="text-[10px] font-bold text-slate-500">{t.name}</p>
-                          ) : (
-                            <div className="flex-1 min-w-0 pr-2">
-                               <TargetCategorySelector t={t} i={i} curAcc={curAcc} updateAcc={updateAcc} />
-                            </div>
+                    {curAcc.targetPortfolio.map((t, i) => {
+                      const isParking = curAcc.assets.some(a => a.parkingAsset && a.category === t.name);
+                      return (
+                        <div key={i} className={`p-4 rounded-2xl border relative overflow-hidden transition-all ${isParking ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+                          <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: isParking ? '#f59e0b' : t.color }} />
+                          <div className="flex justify-between items-center mb-2 ml-1">
+                            {activeAccount === "pension1" ? (
+                              <p className="text-[10px] font-bold text-slate-500">{t.name}</p>
+                            ) : (
+                              <div className="flex-1 min-w-0 pr-2">
+                                <TargetCategorySelector t={t} i={i} curAcc={curAcc} updateAcc={updateAcc} />
+                              </div>
+                            )}
+                            {activeAccount !== "pension1" && (
+                              isParking ? (
+                                <button
+                                  onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
+                                  className="flex items-center gap-1 text-[10px] font-black text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-2 py-1 rounded-lg ml-1 flex-shrink-0 transition-colors"
+                                >
+                                  <Trash2 size={10} /> 제외
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
+                                  className="text-rose-400 hover:text-rose-600 p-0.5 ml-1 flex-shrink-0"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )
+                            )}
+                          </div>
+                          {isParking && (
+                            <p className="text-[10px] font-bold text-amber-600 ml-1 mb-1.5">🅿 파킹 자산 연결됨</p>
                           )}
-                          {activeAccount !== "pension1" && (
-                            <button onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })} className="text-rose-400 hover:text-rose-600 p-0.5 ml-1 flex-shrink-0"><Trash2 size={12} /></button>
-                          )}
+                          <div className="flex items-center gap-1 ml-1">
+                            <input
+                              type="number"
+                              value={t.value === 0 ? "" : t.value}
+                              onChange={e => { const nt = curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, value: Number(e.target.value) } : item); updateAcc({ targetPortfolio: nt }); }}
+                              className={`w-full border rounded-lg px-2 py-1.5 text-sm font-black text-slate-800 text-right outline-none ${isParking ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'}`}
+                            />
+                            <span className="text-[10px] font-bold text-slate-400">%</span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1 ml-1">
-                          <input type="number" value={t.value === 0 ? "" : t.value} onChange={e => { const nt = curAcc.targetPortfolio.map((item, idx) => idx === i ? { ...item, value: Number(e.target.value) } : item); updateAcc({ targetPortfolio: nt }); }} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-black text-slate-800 text-right outline-none" />
-                          <span className="text-[10px] font-bold text-slate-400">%</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {activeAccount !== "pension1" && (
                       <button onClick={() => updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: "새 자산군", value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] })}
                         className="bg-white border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-all min-h-[5rem]"><Plus size={20} /></button>
