@@ -748,47 +748,67 @@
         const totalSellAmt = fullRebalancePlan.filter(x => x.shares < 0).reduce((s, x) => s + Math.abs(x.shares * x.currentPrice), 0);
         const fee = totalSellAmt * 0.002;
         
-        // Buy-only 로직 (cash 소비)
-        let cash = deployCash; 
+        // Buy-only 로직 — 부족률 비례 분할매수 (상위 3개 자산 캡)
+        // 규칙: 부족 금액 상위 3개 자산에만 배분, 각 자산 배분 한도 = deployCash * (부족금액 / 상위3개 부족금액 합계)
         const orders = [];
-        
-        currentPortfolio.filter(d => (targetBaseAfterBuy * (d.targetWeight / 100) - d.categoryValue) > 0).sort((a, b) => (targetBaseAfterBuy * (b.targetWeight / 100) - b.categoryValue) - (targetBaseAfterBuy * (a.targetWeight / 100) - a.categoryValue))
-          .forEach(item => {
-            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name); const cp = pa ? (pa.currentPrice || pa.price) : 0;
-            const deficit = targetBaseAfterBuy * (item.targetWeight / 100) - item.categoryValue;
-            if (cash >= cp && cp > 0) { const n = Math.min(Math.floor(cash / cp), Math.ceil(deficit / cp)); if (n > 0) { orders.push({ name: item.name, assetName: pa ? pa.name : item.name, shares: n, cost: n * cp, deficit }); cash -= n * cp; } }
-          });
 
+        // 1. 부족 자산 목록 — 부족 금액 내림차순 정렬
+        const deficitItems = currentPortfolio
+          .map(item => {
+            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name);
+            const cp = pa ? (pa.currentPrice || pa.price) : 0;
+            const deficit = (targetBaseAfterBuy * (item.targetWeight / 100)) - item.categoryValue;
+            return { name: item.name, assetName: pa ? pa.name : item.name, cp, deficit };
+          })
+          .filter(x => x.deficit > 0 && x.cp > 0)
+          .sort((a, b) => b.deficit - a.deficit);
+
+        // 2. 상위 3개만 선택
+        const TOP_N = 3;
+        const topItems = deficitItems.slice(0, TOP_N);
+        const totalDeficit = topItems.reduce((s, x) => s + x.deficit, 0);
+
+        // 3. 각 자산에 비례 배분 한도 계산 후 매수
+        let cash = deployCash;
+        topItems.forEach(item => {
+          if (cash <= 0 || item.cp <= 0) return;
+          // 이 자산에 배분할 금액 (비례 + 잔여 현금 범위 내)
+          const allocRatio = totalDeficit > 0 ? item.deficit / totalDeficit : 1 / topItems.length;
+          const allocBudget = Math.min(deployCash * allocRatio, cash, item.deficit);
+          const n = Math.floor(allocBudget / item.cp);
+          if (n > 0) {
+            const cost = n * item.cp;
+            orders.push({ name: item.name, assetName: item.assetName, shares: n, cost, deficit: item.deficit });
+            cash -= cost;
+          }
+        });
+
+        // 4. 잔여 현금 — 상위 3개 중 아직 부족한 자산에 1주씩 추가 (잔돈 소진)
         let keepBuying = true;
         while (keepBuying && cash > 0) {
           keepBuying = false;
-          const remainingDeficits = currentPortfolio.map(item => {
-            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name);
-            const cp = pa ? (pa.currentPrice || pa.price) : 0;
-            const order = orders.find(o => o.name === item.name);
-            const orderCost = order ? order.cost : 0;
-            const currentDeficit = (targetBaseAfterBuy * (item.targetWeight / 100)) - (item.categoryValue + orderCost);
-            return { name: item.name, assetName: pa ? pa.name : item.name, cp, currentDeficit };
-          }).filter(x => x.currentDeficit > 0 && cash >= x.cp && x.cp > 0).sort((a, b) => b.currentDeficit - a.currentDeficit);
+          const candidates = topItems
+            .map(item => {
+              const order = orders.find(o => o.name === item.name);
+              const orderCost = order ? order.cost : 0;
+              const remaining = item.deficit - orderCost;
+              return { ...item, remaining };
+            })
+            .filter(x => x.remaining > 0 && cash >= x.cp)
+            .sort((a, b) => b.remaining - a.remaining);
 
-          if (remainingDeficits.length > 0) {
-            const target = remainingDeficits[0];
+          if (candidates.length > 0) {
+            const target = candidates[0];
             const orderIndex = orders.findIndex(o => o.name === target.name);
             if (orderIndex >= 0) {
               orders[orderIndex] = {
                 ...orders[orderIndex],
                 shares: orders[orderIndex].shares + 1,
                 cost: orders[orderIndex].cost + target.cp,
-                deficit: Math.max(0, target.currentDeficit - target.cp)
+                deficit: Math.max(0, orders[orderIndex].deficit - target.cp)
               };
             } else {
-              orders.push({
-                name: target.name,
-                assetName: target.assetName,
-                shares: 1,
-                cost: target.cp,
-                deficit: Math.max(0, target.currentDeficit - target.cp)
-              });
+              orders.push({ name: target.name, assetName: target.assetName, shares: 1, cost: target.cp, deficit: Math.max(0, target.deficit - target.cp) });
             }
             cash -= target.cp;
             keepBuying = true;
@@ -1351,7 +1371,10 @@
                     )}
 
                     <div className={`${cardBase} p-6`}>
-                      <p className="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2"><Calculator size={16} style={{ color: curAcc.color }} /> 적립식 매수 도우미 (Buy-Only)</p>
+                      <div className="flex items-center justify-between mb-4">
+                        <p className="text-sm font-bold text-slate-700 flex items-center gap-2"><Calculator size={16} style={{ color: curAcc.color }} /> 적립식 매수 도우미</p>
+                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded-lg">부족 상위 3개 비례분할</span>
+                      </div>
                       
                       {buyLogic.invalidTarget ? (
                         <div className="py-8 text-center bg-rose-50 border border-rose-200 rounded-2xl flex flex-col items-center justify-center">
@@ -1417,7 +1440,7 @@
                           </div>
                           <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
-                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 무리하게 매수하지 말고 이월하세요.</p>
+                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">부족 상위 3개 자산에 비례 배분했습니다. 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
                           </div>
                         </React.Fragment>
                       )}
