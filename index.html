@@ -59,13 +59,14 @@
 
   <!-- React 앱 코드 (Babel 모듈 사용) -->
   <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useRef, useMemo } from "https://esm.sh/react@18.2.0";
+    import React, { useState, useEffect, useRef, useMemo, useCallback } from "https://esm.sh/react@18.2.0";
     import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
     import {
       TrendingUp, Calendar, AlertTriangle, CheckCircle2, DollarSign,
       LayoutDashboard, List, Plus, Trash2, RefreshCw, Wallet, Calculator,
       Info, ChevronDown, X, Settings, Download, Upload, PieChart, Coins,
-      Archive, ShieldCheck, BarChart3, User, ArrowUp, ArrowDown, SlidersHorizontal
+      Archive, ShieldCheck, BarChart3, User, ArrowUp, ArrowDown, SlidersHorizontal,
+      GripVertical
     } from "https://esm.sh/lucide-react@0.292.0";
 
     const fmt = (n) => {
@@ -104,6 +105,13 @@
       "국내채권":    "안전자산",
       "글로벌채권":  "안전자산",
       "현금/단기채": "안전자산",
+      // pension1 기본 자산군명 추가
+      "S&P500":   "위험자산",
+      "나스닥":   "위험자산",
+      "CSI300":   "위험자산",
+      "한국200":  "위험자산",
+      "미국채":   "안전자산",
+      "국고채":   "안전자산",
     };
 
     const PENSION1_DEFAULT_TARGET = [
@@ -145,10 +153,17 @@
       } else {
         next.dcIrp = { ...createDefaultDcIrp(), ...next.dcIrp };
       }
-      
+
       Object.keys(next).forEach(accKey => {
-        if (next[accKey].assets) {
-          next[accKey].assets = next[accKey].assets.map(asset => {
+        const acc = next[accKey];
+        if (!acc || typeof acc !== 'object') return;
+
+        const safeAssets = Array.isArray(acc.assets) ? acc.assets : [];
+
+        // 원본 변이 방지: 항상 새 객체를 생성하여 next에 재할당
+        next[accKey] = {
+          ...acc,
+          assets: safeAssets.map(asset => {
             const updated = { ...asset };
             if (updated.parkingAsset === undefined) {
               updated.parkingAsset = false;
@@ -157,10 +172,13 @@
               updated.stockRatio = 30;
             }
             return updated;
-          });
-        }
+          }),
+          contributions:     Array.isArray(acc.contributions)     ? acc.contributions     : [],
+          pastContributions: Array.isArray(acc.pastContributions) ? acc.pastContributions : [],
+          targetPortfolio:   Array.isArray(acc.targetPortfolio)   ? acc.targetPortfolio   : [],
+        };
       });
-      
+
       return next;
     };
 
@@ -217,9 +235,19 @@
     }
 
     function DonutChart({ data, title, subtitle, centerLabel = "총 비중" }) {
-      let cum = 0;
       const rawTotal = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
       const normalizeFactor = rawTotal > 0 ? 100 / rawTotal : 1;
+
+      // 렌더 전 누적값 미리 계산 (순수 함수 유지)
+      const segments = data.map((s) => {
+        const val = (Number(s.value) || 0) * normalizeFactor;
+        return { ...s, normalizedVal: val };
+      }).reduce((acc, s) => {
+        const offset = 100 - acc.cum;
+        acc.items.push({ ...s, offset });
+        acc.cum += s.normalizedVal;
+        return acc;
+      }, { items: [], cum: 0 }).items;
 
       return (
         <div className="flex flex-col items-center bg-white p-5 rounded-2xl border border-slate-200 shadow-sm w-full">
@@ -227,19 +255,13 @@
           <p className="text-xs text-slate-400 mt-0.5 mb-4">{subtitle}</p>
           <div className="relative w-40 h-40 sm:w-48 sm:h-48">
             <svg viewBox="0 0 40 40" className="-rotate-90 w-full h-full">
-              {data.map((s, i) => {
-                const rawVal = Number(s.value) || 0;
-                const val = rawVal * normalizeFactor; 
-                const da = `${val} ${100 - val}`;
-                const offset = 100 - cum;
-                cum += val;
-                return (
-                  <circle key={i} cx="20" cy="20" r="15.92" fill="transparent"
-                    stroke={s.color} strokeWidth="5.5"
-                    strokeDasharray={da} strokeDashoffset={offset}
-                    className="transition-all duration-500 ease-in-out" />
-                );
-              })}
+              {segments.map((s, i) => (
+                <circle key={i} cx="20" cy="20" r="15.92" fill="transparent"
+                  stroke={s.color} strokeWidth="5.5"
+                  strokeDasharray={`${s.normalizedVal} ${100 - s.normalizedVal}`}
+                  strokeDashoffset={s.offset}
+                  className="transition-all duration-500 ease-in-out" />
+              ))}
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="text-[10px] text-slate-400 font-semibold">{centerLabel}</span>
@@ -417,6 +439,17 @@
           {showPreset && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-2xl shadow-xl z-[60] overflow-hidden">
               <div className="p-1.5 flex flex-col max-h-72 overflow-y-auto scrollbar-hide">
+                
+                {/* 현재 값이 프리셋 목록에 없는 커스텀명일 때 상단에 현재값 표시 */}
+                {asset.category && !ASSET_PRESETS.some(p => p.label === asset.category) && (
+                  <div className="flex items-center gap-2 px-4 py-2.5 mb-1 bg-indigo-50 border-b border-slate-100 rounded-xl">
+                    <span className="text-emerald-500 font-black text-xs">✓</span>
+                    <span className="text-[11px] font-bold text-indigo-700 truncate">
+                      현재: {asset.category}
+                    </span>
+                  </div>
+                )}
+
                 {ASSET_PRESETS.map(preset => (
                   <button key={preset.label} type="button" onClick={() => handleSelect(preset)}
                     className={`flex items-center gap-3 w-full px-4 py-3 rounded-xl text-sm font-bold text-left transition-all hover:bg-slate-50 ${preset.label === "직접입력" ? "text-slate-400 border-t border-slate-100 mt-1 pt-3 justify-center" : asset.category === preset.label ? "bg-slate-50 text-slate-900" : "text-slate-700"}`}>
@@ -440,6 +473,21 @@
       const [global, setGlobal] = useState({ userName: "김투자", incomeLevel: "5500이하" });
       const [confirmReset, setConfirmReset] = useState(false);
       const [parkingDeployRatio, setParkingDeployRatio] = useState(0); // 파킹 자산 활용 비율 상태 추가
+
+      // 종목별 합산 현황 정렬 상태
+      const [mergedSortKey, setMergedSortKey] = useState('value');
+      // 'value' | 'returnRate' | 'returnAmt' | 'custom'
+      const [mergedSortDir, setMergedSortDir] = useState('desc');
+      // 'desc' | 'asc'
+      const [mergedCustomOrder, setMergedCustomOrder] = useState([]);
+      // 직접정렬 모드일 때 종목명 순서 배열
+
+      // 드래그 앤 드롭 상태
+      const [draggedIdx, setDraggedIdx] = useState(null);
+      const [dragOverIdx, setDragOverIdx] = useState(null);
+      const touchStartRef = useRef({ idx: null });
+      const dragOverIdxRef = useRef(null);
+      const mergedListRef = useRef(null);
 
       const [accounts, setAccounts] = useState({
         pension1: {
@@ -567,7 +615,7 @@
         setDDay(Math.ceil((target - today) / 86400000));
       }, [activeAccount, accounts, curAcc.rebalanceMonth, curAcc.rebalanceDay, rebalanceYear]);
 
-      const calcAccStats = (acc) => {
+      const calcAccStats = useCallback((acc) => {
         const allocationBaseValue = getAllocationBaseValue(acc.assets);
         const parkingValue = getParkingAssetValue(acc.assets);
         const totalCurrentValue = acc.assets.reduce((s, a) => s + getAssetMarketValue(a), 0);
@@ -626,7 +674,7 @@
           riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, 
           employerCash, personalCash 
         };
-      };
+      }, [currentYear]);
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
       const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (stats.thisMonthDividend || 0);
@@ -648,6 +696,63 @@
           return acc;
         }, { totalValue: 0, totalPrincipal: 0, accountValues: [] });
         
+        // ── 개별 자산 합산 (종목명 기준 병합) ──
+        const assetMergeMap = {};
+        allKeys.forEach(accKey => {
+          const acc = accounts[accKey];
+          (acc.assets || []).forEach(a => {
+            const mergeKey = (a.name || "").trim();
+            if (!mergeKey) return;
+            const marketValue = (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
+            const bookValue   = (Number(a.quantity) || 0) * (Number(a.price) || 0);
+            const qty         = Number(a.quantity) || 0;
+            if (!assetMergeMap[mergeKey]) {
+              const tColor = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
+              assetMergeMap[mergeKey] = {
+                name: a.name,
+                code: a.code || "",
+                category: a.category || "",
+                totalMarketValue: 0,
+                totalBookValue: 0,
+                totalQuantity: 0,
+                color: tColor,
+              };
+            }
+            assetMergeMap[mergeKey].totalMarketValue += marketValue;
+            assetMergeMap[mergeKey].totalBookValue   += bookValue;
+            assetMergeMap[mergeKey].totalQuantity    += qty;
+            if (!assetMergeMap[mergeKey].color) {
+              const tColor2 = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
+              if (tColor2) assetMergeMap[mergeKey].color = tColor2;
+            }
+          });
+        });
+
+        const totalMergedValue = Object.values(assetMergeMap)
+          .reduce((s, a) => s + a.totalMarketValue, 0);
+
+        summary.mergedAssets = Object.values(assetMergeMap)
+          .sort((a, b) => b.totalMarketValue - a.totalMarketValue)
+          .map((a, idx) => ({
+            name:             a.name,
+            code:             a.code,
+            category:         a.category,
+            totalMarketValue: a.totalMarketValue,
+            totalQuantity:    a.totalQuantity,
+            avgPrice:         a.totalQuantity > 0 ? Math.round(a.totalBookValue / a.totalQuantity) : 0,
+            returnAmt:        a.totalMarketValue - a.totalBookValue,
+            returnRate:       a.totalBookValue > 0
+                                ? ((a.totalMarketValue - a.totalBookValue) / a.totalBookValue) * 100
+                                : 0,
+            pct:              totalMergedValue > 0
+                                ? Number(((a.totalMarketValue / totalMergedValue) * 100).toFixed(1))
+                                : 0,
+            color:            a.color || DEFAULT_COLORS[idx % DEFAULT_COLORS.length],
+          }));
+
+        summary.totalMergedValue = totalMergedValue;
+        // ── 병합 끝 ──
+
         const dcIrpTaxCreditCash = (accounts.dcIrp && accounts.dcIrp.taxCreditEligible) ? accounts.dcIrp.contributions
           .filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입")
           .reduce((s, c) => s + (Number(c.amount) || 0), 0) : 0;
@@ -655,7 +760,7 @@
         const creditBase = (statsMap.pension1?.yearCash || 0) + (statsMap.irp?.yearCash || 0) + dcIrpTaxCreditCash;
         summary.estimatedTaxRefund = Math.min(creditBase, 9000000) * (global.incomeLevel === "5500이하" ? 0.165 : 0.132);
         return summary;
-      }, [accounts, global, currentYear]);
+      }, [accounts, global, currentYear, calcAccStats]);
 
       const buyLogic = useMemo(() => {
         const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
@@ -833,6 +938,118 @@
         // buyLogic 반환 객체에 deployParkingCash 및 deployCash 추가 전달
         return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: normalRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash };
       }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio]);
+
+      // 종목별 합산 현황 표시용 정렬 결과
+      const sortedMergedAssets = useMemo(() => {
+        const list = reportStats.mergedAssets || [];
+        if (list.length === 0) return [];
+
+        // 직접정렬 모드
+        if (mergedSortKey === 'custom' && mergedCustomOrder.length > 0) {
+          const orderMap = {};
+          mergedCustomOrder.forEach((name, idx) => { orderMap[name] = idx; });
+          // 커스텀 순서에 없는 새 항목은 맨 뒤로
+          return [...list].sort((a, b) => {
+            const ai = orderMap[a.name] ?? 9999;
+            const bi = orderMap[b.name] ?? 9999;
+            return ai - bi;
+          });
+        }
+
+        // 기준 정렬
+        return [...list].sort((a, b) => {
+          let aVal, bVal;
+          if (mergedSortKey === 'returnRate') {
+            aVal = a.returnRate; bVal = b.returnRate;
+          } else if (mergedSortKey === 'returnAmt') {
+            aVal = a.returnAmt; bVal = b.returnAmt;
+          } else {
+            // 기본: value (평가금액)
+            aVal = a.totalMarketValue; bVal = b.totalMarketValue;
+          }
+          return mergedSortDir === 'desc' ? bVal - aVal : aVal - bVal;
+        });
+      }, [reportStats.mergedAssets, mergedSortKey, mergedSortDir, mergedCustomOrder]);
+
+      // 직접정렬 모드 진입 — 현재 표시 순서를 초기 커스텀 순서로 설정
+      const handleEnterCustomSort = () => {
+        setMergedCustomOrder(sortedMergedAssets.map(a => a.name));
+        setMergedSortKey('custom');
+      };
+
+      // ── 드래그 앤 드롭 핸들러 ──
+      const applyDrop = (fromIdx, toIdx) => {
+        if (fromIdx === null || toIdx === null || fromIdx === toIdx) return;
+        const order = [...mergedCustomOrder];
+        const [removed] = order.splice(fromIdx, 1);
+        order.splice(toIdx, 0, removed);
+        setMergedCustomOrder(order);
+      };
+
+      // HTML5 DnD (데스크톱)
+      const handleDragStart = (idx) => {
+        setDraggedIdx(idx);
+      };
+      const handleDragOver = (e, idx) => {
+        e.preventDefault();
+        setDragOverIdx(idx);
+      };
+      const handleDrop = (idx) => {
+        applyDrop(draggedIdx, idx);
+        setDraggedIdx(null);
+        setDragOverIdx(null);
+      };
+      const handleDragEnd = () => {
+        setDraggedIdx(null);
+        setDragOverIdx(null);
+      };
+
+      // Touch (모바일)
+      const handleTouchStart = (idx) => {
+        touchStartRef.current.idx = idx;
+        setDraggedIdx(idx);
+      };
+
+      const handleTouchEnd = () => {
+        applyDrop(touchStartRef.current.idx, dragOverIdxRef.current);
+        touchStartRef.current.idx = null;
+        dragOverIdxRef.current = null;
+        setDraggedIdx(null);
+        setDragOverIdx(null);
+      };
+      // ── DnD 끝 ──
+
+      useEffect(() => {
+        const el = mergedListRef.current;
+        if (!el) return;
+
+        const onTouchMove = (e) => {
+          // 직접정렬 모드일 때만 스크롤 차단 후 드래그 처리
+          if (touchStartRef.current.idx === null) return;
+          e.preventDefault();
+
+          const touch = e.touches[0];
+          const elements = el.querySelectorAll('[data-merged-drag-idx]');
+          let closestIdx = null;
+          let closestDist = Infinity;
+          elements.forEach(elItem => {
+            const rect = elItem.getBoundingClientRect();
+            const centerY = rect.top + rect.height / 2;
+            const dist = Math.abs(touch.clientY - centerY);
+            if (dist < closestDist) {
+              closestDist = dist;
+              closestIdx = parseInt(elItem.dataset.mergedDragIdx, 10);
+            }
+          });
+          if (closestIdx !== null && closestIdx !== touchStartRef.current.idx) {
+            dragOverIdxRef.current = closestIdx;
+            setDragOverIdx(closestIdx);
+          }
+        };
+
+        el.addEventListener('touchmove', onTouchMove, { passive: false });
+        return () => el.removeEventListener('touchmove', onTouchMove);
+      }, [mergedSortKey]);
 
       const chAsset = (id, f, v) => updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v } : a) });
       const chContrib = (id, f, v) => updateAcc({ contributions: curAcc.contributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
@@ -1118,7 +1335,17 @@
                   <p className="text-4xl font-black text-slate-900 mb-6 relative z-10">₩{fmt(reportStats.totalValue)}</p>
                   <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 relative z-10">
                     <div><p className="text-[10px] font-bold text-slate-400">총 납입 원금</p><p className="text-sm font-bold text-slate-700">₩{fmt(reportStats.totalPrincipal)}</p></div>
-                    <div><p className="text-[10px] font-bold text-slate-400">총 누적 손익</p><p className="text-sm font-bold text-rose-500">+{fmt(reportStats.totalValue - reportStats.totalPrincipal)}</p></div>
+                    <div>
+                      <p className="text-[10px] font-bold text-slate-400">총 누적 손익</p>
+                      <p className={`text-sm font-bold ${
+                        (reportStats.totalValue - reportStats.totalPrincipal) >= 0
+                          ? 'text-rose-500'
+                          : 'text-blue-500'
+                      }`}>
+                        {(reportStats.totalValue - reportStats.totalPrincipal) >= 0 ? '+' : ''}
+                        {fmt(reportStats.totalValue - reportStats.totalPrincipal)}원
+                      </p>
+                    </div>
                   </div>
                 </div>
                 <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
@@ -1132,6 +1359,173 @@
                 </div>
                 <DonutChart title="계좌별 자산 비중" subtitle="포트폴리오 내 자금 분산도" centerLabel="통합"
                   data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
+                  
+                {/* 개별 자산 합산 비중 섹션 */}
+                {reportStats.mergedAssets && reportStats.mergedAssets.length > 0 && (
+                  <div className="space-y-3">
+                    <DonutChart
+                      title="개별 자산 비중"
+                      subtitle="전 계좌 동일 종목 합산 기준"
+                      centerLabel="통합"
+                      data={reportStats.mergedAssets.map(a => ({
+                        name: a.name,
+                        value: a.pct,
+                        color: a.color,
+                      }))}
+                    />
+
+                    <div className={`${cardBase} p-5`}>
+                      {/* 헤더 + 정렬 버튼 */}
+                      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+                        <p className="text-sm font-bold text-slate-700 flex items-center gap-2 flex-shrink-0">
+                          <List size={15} className="text-slate-400" /> 종목별 합산 현황
+                        </p>
+                        <div className="flex items-center gap-1 flex-wrap justify-end">
+                          {[
+                            { key: 'value',      label: '평가금액' },
+                            { key: 'returnRate', label: '수익률'   },
+                            { key: 'returnAmt',  label: '수익금액' },
+                          ].map(opt => (
+                            <button key={opt.key}
+                              onClick={() => {
+                                setDraggedIdx(null);
+                                setDragOverIdx(null);
+                                dragOverIdxRef.current = null;
+                                if (mergedSortKey === opt.key) {
+                                  setMergedSortDir(d => d === 'desc' ? 'asc' : 'desc');
+                                } else {
+                                  setMergedSortKey(opt.key);
+                                  setMergedSortDir('desc');
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border flex items-center gap-0.5 ${
+                                mergedSortKey === opt.key && mergedSortKey !== 'custom'
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300'
+                              }`}>
+                              {opt.label}
+                              {mergedSortKey === opt.key && mergedSortKey !== 'custom' && (
+                                <span className="ml-0.5 text-[9px]">
+                                  {mergedSortDir === 'desc' ? '▼' : '▲'}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => {
+                              setDraggedIdx(null);
+                              setDragOverIdx(null);
+                              dragOverIdxRef.current = null;
+                              if (mergedSortKey === 'custom') {
+                                // 직접정렬 해제 → 평가금액 기본 복귀
+                                setMergedSortKey('value');
+                                setMergedSortDir('desc');
+                                setMergedCustomOrder([]);
+                              } else {
+                                handleEnterCustomSort();
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
+                              mergedSortKey === 'custom'
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300'
+                            }`}>
+                            {mergedSortKey === 'custom' ? '정렬 해제' : '직접정렬'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 직접정렬 안내 */}
+                      {mergedSortKey === 'custom' && (
+                        <div className="mb-3 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] text-indigo-700 font-bold flex items-center gap-1.5">
+                          <GripVertical size={12} /> 행을 길게 누르거나 잡아서 끌어 순서를 변경하세요.
+                        </div>
+                      )}
+
+                      {/* 종목 리스트 */}
+                      <div className="space-y-0" ref={mergedListRef}>
+                        {sortedMergedAssets.map((a, idx) => {
+                          const isPos = a.returnAmt >= 0;
+                          const retColor = a.returnAmt > 0
+                            ? "text-rose-500"
+                            : a.returnAmt < 0
+                            ? "text-blue-500"
+                            : "text-slate-400";
+
+                          const isDragging  = mergedSortKey === 'custom' && draggedIdx === idx;
+                          const isDropTarget = mergedSortKey === 'custom' && dragOverIdx === idx && draggedIdx !== idx;
+
+                          return (
+                            <div key={a.name}
+                              data-merged-drag-idx={idx}
+                              draggable={mergedSortKey === 'custom'}
+                              onDragStart={() => handleDragStart(idx)}
+                              onDragOver={(e) => mergedSortKey === 'custom' && handleDragOver(e, idx)}
+                              onDrop={() => mergedSortKey === 'custom' && handleDrop(idx)}
+                              onDragEnd={handleDragEnd}
+                              onTouchStart={() => mergedSortKey === 'custom' && handleTouchStart(idx)}
+                              onTouchEnd={() => mergedSortKey === 'custom' && handleTouchEnd()}
+                              className={[
+                                "flex items-center gap-2 py-2.5 border-b border-slate-50 last:border-0 transition-all duration-150",
+                                isDragging   ? "opacity-40 bg-slate-50 rounded-xl"      : "",
+                                mergedSortKey === 'custom' ? "cursor-grab active:cursor-grabbing" : "",
+                              ].filter(Boolean).join(" ")}
+                              style={isDropTarget ? {
+                                borderTopWidth: '2px',
+                                borderTopStyle: 'solid',
+                                borderTopColor: '#818cf8', /* indigo-400 */
+                                borderBottomWidth: '0px'
+                              } : {}}>
+
+                              {/* 드래그 핸들 (직접정렬 모드에서만) */}
+                              {mergedSortKey === 'custom' && (
+                                <div className="flex-shrink-0 text-slate-300 hover:text-slate-500 transition-colors pl-0.5">
+                                  <GripVertical size={16} />
+                                </div>
+                              )}
+
+                              {/* 색상 점 + 종목 정보 */}
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                  style={{ background: a.color }} />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-800 truncate leading-tight"
+                                    style={{ maxWidth: "160px" }}>
+                                    {a.name}
+                                  </p>
+                                  <p className="text-[10px] text-slate-400 leading-tight">
+                                    {a.totalQuantity.toLocaleString("ko-KR")}주 ·
+                                    평단 ₩{a.avgPrice.toLocaleString("ko-KR")}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* 금액 + 손익 */}
+                              <div className="text-right flex-shrink-0">
+                                <p className="text-xs font-bold text-slate-800">
+                                  ₩{fmt(a.totalMarketValue)}
+                                </p>
+                                <p className={`text-[10px] font-bold ${retColor}`}>
+                                  {isPos ? "+" : ""}{fmt(a.returnAmt)}원
+                                  ({isPos ? "▲" : a.returnAmt < 0 ? "▼" : ""}
+                                  {Math.abs(a.returnRate).toFixed(2)}%)
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* 합계 푸터 */}
+                      <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-500">전체 합계</span>
+                        <span className="text-sm font-black text-slate-800">
+                          ₩{fmt(reportStats.totalMergedValue)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1536,18 +1930,9 @@
                             <div>
                               <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
                                 자산군
-                                <Tip text={activeAccount === "pension1"
-                                  ? "이 계좌는 올웨더 7개 자산군으로 고정되어 있습니다. 설정 탭에서 비중을 조절할 수 있습니다."
-                                  : "종목이 속한 자산군을 선택하세요. 목표 비중과 연동되어 매수 도우미와 리밸런싱 계산에 사용됩니다."} />
+                                <Tip text="종목이 속한 자산군을 선택하세요. 목표 비중과 연동되어 매수 도우미와 리밸런싱 계산에 사용됩니다." />
                               </label>
-                              {activeAccount === "pension1" ? (
-                                <select value={asset.category} onChange={e => chAsset(asset.id, "category", e.target.value)} className={inpBase}>
-                                  <option value="">선택</option>
-                                  {curAcc.targetPortfolio.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
-                                </select>
-                              ) : (
-                                <AssetCategorySelector asset={asset} curAcc={curAcc} updateAcc={updateAcc} chAsset={chAsset} showMsg={showMsg} inpBase={inpBase} />
-                              )}
+                              <AssetCategorySelector asset={asset} curAcc={curAcc} updateAcc={updateAcc} chAsset={chAsset} showMsg={showMsg} inpBase={inpBase} />
                             </div>
 
                             {/* 혼합 자산군(주식+채권) 비중 슬라이더 */}
@@ -1866,32 +2251,28 @@
                     {curAcc.targetPortfolio.map((t, i) => {
                       const isParking = curAcc.assets.some(a => a.parkingAsset && a.category === t.name);
                       return (
-                        <div key={i} className={`p-4 rounded-2xl border relative overflow-hidden transition-all ${isParking ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
-                          <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: isParking ? '#f59e0b' : t.color }} />
-                          <div className="flex justify-between items-center mb-2 ml-1">
-                            {activeAccount === "pension1" ? (
-                              <p className="text-[10px] font-bold text-slate-500">{t.name}</p>
+                        <div key={i}
+                          className={`p-4 rounded-2xl border relative transition-all
+                            ${isParking ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}
+                          style={{ borderLeftWidth: '6px', borderLeftColor: isParking ? '#f59e0b' : t.color }}>
+                          <div className="flex justify-between items-center mb-2">
+                            <div className="flex-1 min-w-0 pr-2">
+                              <TargetCategorySelector t={t} i={i} curAcc={curAcc} updateAcc={updateAcc} />
+                            </div>
+                            {isParking ? (
+                              <button
+                                onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
+                                className="flex items-center gap-1 text-[10px] font-black text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-2 py-1 rounded-lg ml-1 flex-shrink-0 transition-colors"
+                              >
+                                <Trash2 size={10} /> 제외
+                              </button>
                             ) : (
-                              <div className="flex-1 min-w-0 pr-2">
-                                <TargetCategorySelector t={t} i={i} curAcc={curAcc} updateAcc={updateAcc} />
-                              </div>
-                            )}
-                            {activeAccount !== "pension1" && (
-                              isParking ? (
-                                <button
-                                  onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
-                                  className="flex items-center gap-1 text-[10px] font-black text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 px-2 py-1 rounded-lg ml-1 flex-shrink-0 transition-colors"
-                                >
-                                  <Trash2 size={10} /> 제외
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
-                                  className="text-rose-400 hover:text-rose-600 p-0.5 ml-1 flex-shrink-0"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              )
+                              <button
+                                onClick={() => updateAcc({ targetPortfolio: curAcc.targetPortfolio.filter((_, idx) => idx !== i) })}
+                                className="text-rose-400 hover:text-rose-600 p-0.5 ml-1 flex-shrink-0"
+                              >
+                                <Trash2 size={12} />
+                              </button>
                             )}
                           </div>
                           {isParking && (
@@ -1909,10 +2290,8 @@
                         </div>
                       );
                     })}
-                    {activeAccount !== "pension1" && (
-                      <button onClick={() => updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: "새 자산군", value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] })}
-                        className="bg-white border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-all min-h-[5rem]"><Plus size={20} /></button>
-                    )}
+                    <button onClick={() => updateAcc({ targetPortfolio: [...curAcc.targetPortfolio, { name: "새 자산군", value: 0, color: DEFAULT_COLORS[curAcc.targetPortfolio.length % DEFAULT_COLORS.length] }] })}
+                      className="bg-white border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-50 transition-all min-h-[5rem]"><Plus size={20} /></button>
                   </div>
                   {curAcc.targetPortfolio.length > 0 && (
                     <div className={`mt-4 p-4 rounded-xl flex justify-between items-center font-bold text-xs ${curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) === 100 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
