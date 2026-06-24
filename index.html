@@ -8,8 +8,18 @@
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- React JSX 자동 런타임용 import map (Babel 8 automatic runtime 대응) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.2.0/jsx-dev-runtime"
+    }
+  }
+  </script>
+
   <!-- Babel CDN (브라우저에서 JSX 컴파일) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.7/babel.min.js"></script>
 
   <style>
     /* 스크롤바 숨김 유틸리티 클래스 */
