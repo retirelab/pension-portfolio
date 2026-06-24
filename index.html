@@ -80,11 +80,32 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     const fmt = (n) => {
-      const num = Number(n);
-      return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
-    };
+  const num = Number(n);
+  return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
+};
 
-    const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// items를 CONCURRENCY개씩 묶어 동시 처리하고, 묶음 사이에만 짧게 대기 (프록시 rate-limit 회피)
+const fetchWithConcurrency = async (items, worker, concurrency = 3, gapMs = 300) => {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map(worker));
+    results.push(...batchResults);
+    if (i + concurrency < items.length) await sleep(gapMs);
+  }
+  return results;
+};
+
+// 실패한 종목명 목록을 메시지용 문자열로 변환 (최대 max개까지 표시, 나머지는 "외 N건")
+const formatFailedNames = (names, max = 3) => {
+  if (names.length === 0) return "";
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} 외 ${names.length - max}건`;
+};
+
+const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
 
     // 혼합 자산군 관리용 상수
     const MIXED_ASSET_CATEGORIES = ["주식+채권"];
@@ -1117,80 +1138,82 @@
       };
 
       const fetchAllPrices = async () => {
-        if (isFetching) return;
-        
-        setIsFetching(true); setFetchError(""); let err = false;
-        const currentAccount = activeAccount;
-        const currentAssets = accounts[currentAccount].assets;
+  if (isFetching) return;
 
-        const updates = await Promise.all(currentAssets.map(async a => {
-          if (a.code && a.code.length >= 5) { 
-            const d = await fetchStock(a.code); 
-            if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name }; 
-            err = true; 
-          }
-          return null;
-        }));
+  setIsFetching(true); setFetchError("");
+  const currentAccount = activeAccount;
+  const currentAssets = accounts[currentAccount].assets;
+  const failedNames = [];
 
-        setAccounts(prev => {
-          if (!prev[currentAccount]) return prev;
-          return {
-            ...prev,
-            [currentAccount]: {
-              ...prev[currentAccount],
-              assets: prev[currentAccount].assets.map(prevAsset => {
-                const update = updates.find(u => u && u.id === prevAsset.id);
-                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-              })
-            }
-          };
-        });
+  const codedAssets = currentAssets.filter(a => a.code && a.code.length >= 5);
+  const updates = await fetchWithConcurrency(codedAssets, async a => {
+    const d = await fetchStock(a.code);
+    if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
+    failedNames.push(a.name || a.code);
+    return null;
+  });
 
-        setIsFetching(false);
-        if (err) { setFetchError("일부 종목 조회 실패"); setTimeout(() => setFetchError(""), 3000); }
-      };
+  setAccounts(prev => {
+    if (!prev[currentAccount]) return prev;
+    return {
+      ...prev,
+      [currentAccount]: {
+        ...prev[currentAccount],
+        assets: prev[currentAccount].assets.map(prevAsset => {
+          const update = updates.find(u => u && u.id === prevAsset.id);
+          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+        })
+      }
+    };
+  });
 
+  setIsFetching(false);
+  if (failedNames.length > 0) {
+    setFetchError(`조회 실패: ${formatFailedNames(failedNames)}`);
+    setTimeout(() => setFetchError(""), 5000);
+  }
+};
       const fetchAllAccountsPrices = async () => {
-        if (isFetchingAll) return;
+  if (isFetchingAll) return;
 
-        setIsFetchingAll(true);
-        let hasErr = false;
-        const accountUpdates = {};
-        
-        for (const accKey of Object.keys(accounts)) {
-          if (accKey === "report") continue;
-          const acc = accounts[accKey];
-          const updates = await Promise.all(acc.assets.map(async a => {
-            if (a.code && a.code.length >= 5) {
-              const d = await fetchStock(a.code);
-              if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
-              hasErr = true;
-            }
-            return null;
-          }));
-          accountUpdates[accKey] = updates;
-        }
-        
-        setAccounts(prev => {
-          const nextAccounts = { ...prev };
-          for (const accKey of Object.keys(accountUpdates)) {
-            if (!nextAccounts[accKey]) continue;
-            const updates = accountUpdates[accKey];
-            nextAccounts[accKey] = {
-              ...nextAccounts[accKey],
-              assets: nextAccounts[accKey].assets.map(prevAsset => {
-                const update = updates.find(u => u && u.id === prevAsset.id);
-                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-              })
-            };
-          }
-          return nextAccounts;
-        });
+  setIsFetchingAll(true);
+  const accountUpdates = {};
+  const failedNames = [];
 
-        setIsFetchingAll(false);
-        if (hasErr) showMsg("error", "일부 계좌의 종목 갱신에 실패했습니다.");
-        else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+  for (const accKey of Object.keys(accounts)) {
+    if (accKey === "report") continue;
+    const acc = accounts[accKey];
+    const accLabel = acc.label.split(" ")[0];
+    const codedAssets = acc.assets.filter(a => a.code && a.code.length >= 5);
+    const updates = await fetchWithConcurrency(codedAssets, async a => {
+      const d = await fetchStock(a.code);
+      if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
+      failedNames.push(`[${accLabel}] ${a.name || a.code}`);
+      return null;
+    });
+    accountUpdates[accKey] = updates;
+  }
+
+  setAccounts(prev => {
+    const nextAccounts = { ...prev };
+    for (const accKey of Object.keys(accountUpdates)) {
+      if (!nextAccounts[accKey]) continue;
+      const updates = accountUpdates[accKey];
+      nextAccounts[accKey] = {
+        ...nextAccounts[accKey],
+        assets: nextAccounts[accKey].assets.map(prevAsset => {
+          const update = updates.find(u => u && u.id === prevAsset.id);
+          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+        })
       };
+    }
+    return nextAccounts;
+  });
+
+  setIsFetchingAll(false);
+  if (failedNames.length > 0) showMsg("error", `조회 실패: ${formatFailedNames(failedNames)}`);
+  else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+};
 
       const exportData = () => {
         const payload = {
