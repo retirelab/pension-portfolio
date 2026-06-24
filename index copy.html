@@ -5,11 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>절세 3총사 관리 대시보드</title>
   
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Babel CDN (브라우저에서 JSX 컴파일) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+      "react/jsx-dev-runtime": "https://esm.sh/react@18.2.0/jsx-dev-runtime"
+    }
+  }
+  </script>
+
+  <script src="https://unpkg.com/@babel/standalone@7.26.7/babel.min.js"></script>
 
   <style>
     /* 스크롤바 숨김 유틸리티 클래스 */
@@ -57,7 +64,6 @@
 <body class="bg-slate-50">
   <div id="root"></div>
 
-  <!-- React 앱 코드 (Babel 모듈 사용) -->
   <script type="text/babel" data-type="module">
     import React, { useState, useEffect, useRef, useMemo, useCallback } from "https://esm.sh/react@18.2.0";
     import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
@@ -1721,7 +1727,7 @@
                               else if (item.priority === 2) badge = <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
                               else if (item.priority === 3) badge = <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
                             } else if (isSurplus) {
-                              badge = <span className="text-blue-500 font-black text-[10px]">초과</span>;
+                              badge = <span className="text-blue-500 font-black text-[10px]">초 초과</span>;
                             } else if (isBalanced) {
                               badge = <span className="text-emerald-500 font-black text-[10px]">✓</span>;
                             }
