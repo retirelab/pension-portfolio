@@ -627,11 +627,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       useEffect(() => { return () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }; }, []);
 
-      const showMsg = (type, text, duration = 4000) => {
-  setMsg({ type, text });
-  if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
-  msgTimerRef.current = setTimeout(() => setMsg({ type: "", text: "" }), duration);
-};
+      const showMsg = (type, text) => {
+        setMsg({ type, text });
+        if (msgTimerRef.current) clearTimeout(msgTimerRef.current);
+        msgTimerRef.current = setTimeout(() => setMsg({ type: "", text: "" }), 4000);
+      };
 
       const updateAcc = (fields) => setAccounts(prev => ({ ...prev, [activeAccount]: { ...prev[activeAccount], ...fields } }));
       const curAcc = accounts[activeAccount] || accounts.pension1;
@@ -1170,7 +1170,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
   setIsFetching(false);
   if (failedNames.length > 0) {
     setFetchError(`조회 실패: ${formatFailedNames(failedNames)}`);
-    setTimeout(() => setFetchError(""), 10000);
+    setTimeout(() => setFetchError(""), 5000);
   }
 };
       const fetchAllAccountsPrices = async () => {
@@ -1211,8 +1211,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
   });
 
   setIsFetchingAll(false);
-  if (failedNames.length > 0) showMsg("error", `조회 실패: ${formatFailedNames(failedNames)}`, 10000);
+  if (failedNames.length > 0) showMsg("error", `조회 실패: ${formatFailedNames(failedNames)}`);
   else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+};
 
       const exportData = () => {
         const payload = {
