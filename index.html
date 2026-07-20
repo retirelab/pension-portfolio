@@ -1095,7 +1095,21 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         updateAcc({ assets: newAssets });
       };
 
+      const GAS_PRICE_PROXY = "https://script.google.com/macros/s/AKfycbzijpg_P0TzHc418PyTwfyny64E5cerg510hn3_WraR6kJ3gnzgh7sd8zITnZ9brN_4Jg/exec";
+
       const fetchStock = async (code) => {
+        // 1순위: 구글 Apps Script 프록시 (구글 서버가 네이버를 직접 조회 → 빠르고 안정적)
+        try {
+          const gasRes = await fetch(`${GAS_PRICE_PROXY}?code=${encodeURIComponent(code)}`);
+          if (gasRes.ok) {
+            const g = await gasRes.json();
+            if (g && g.ok && (g.price || g.name)) {
+              return { price: g.price != null ? Number(g.price) : null, name: g.name || "" };
+            }
+          }
+        } catch (e) {}
+
+        // 2순위(fallback): 기존 공용 프록시 (구글 프록시가 실패했을 때만)
         const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
         for (const proxy of [`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`]) {
           try {
