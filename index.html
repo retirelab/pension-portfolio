@@ -1696,6 +1696,28 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     * 실제 환급액은 개인의 결정세액에 따라 다를 수 있습니다.
                   </p>
                 </div>
+
+                {/* 자산 추이 그래프 */}
+                <div className={`${cardBase} p-6`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><BarChart3 size={16} /> 자산 추이</p>
+                  <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+                    {[
+                      { key: "total", label: "통합" },
+                      { key: "pension1", label: "연금저축1" },
+                      { key: "pension2", label: "연금저축2" },
+                      { key: "irp", label: "개인IRP" },
+                      { key: "dcIrp", label: "퇴직IRP" },
+                      { key: "isa", label: "ISA" },
+                    ].map(t => (
+                      <button key={t.key} onClick={() => setHistoryAccount(t.key)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${historyAccount === t.key ? "bg-indigo-500 text-white shadow-sm" : "bg-slate-100 text-slate-500"}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <HistoryChart history={historyData} accountKey={historyAccount} />
+                </div>
+
                 <DonutChart title="계좌별 자산 비중" subtitle="포트폴리오 내 자금 분산도" centerLabel="통합"
                   data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
                   
@@ -1864,27 +1886,6 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     </div>
                   </div>
                 )}
-
-                {/* 자산 추이 그래프 */}
-                <div className={`${cardBase} p-6`}>
-                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><BarChart3 size={16} /> 자산 추이</p>
-                  <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
-                    {[
-                      { key: "total", label: "통합" },
-                      { key: "pension1", label: "연금저축1" },
-                      { key: "pension2", label: "연금저축2" },
-                      { key: "irp", label: "개인IRP" },
-                      { key: "dcIrp", label: "퇴직IRP" },
-                      { key: "isa", label: "ISA" },
-                    ].map(t => (
-                      <button key={t.key} onClick={() => setHistoryAccount(t.key)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${historyAccount === t.key ? "bg-indigo-500 text-white shadow-sm" : "bg-slate-100 text-slate-500"}`}>
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                  <HistoryChart history={historyData} accountKey={historyAccount} />
-                </div>
 
                 {/* 데이터 관리 (통합) */}
                 <div className={`${cardBase} p-6 space-y-3`}>
