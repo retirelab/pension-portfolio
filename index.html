@@ -954,7 +954,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const tempDeviation = currentPortfolio.map(p => {
           const gap = p.value - p.targetWeight;
           const deficitAmount = (allocationBaseValue * (p.targetWeight / 100)) - p.categoryValue;
-          return { name: p.name, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
+          const matchedAssets = curAcc.assets.filter(a => !a.parkingAsset && a.category === p.name);
+          let assetName = "";
+          if (matchedAssets.length === 1) {
+            assetName = matchedAssets[0].name || "";
+          } else if (matchedAssets.length >= 2) {
+            assetName = `${matchedAssets[0].name || "종목"} 외 ${matchedAssets.length - 1}개`;
+          }
+          return { name: p.name, assetName, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
         });
 
         tempDeviation.sort((a, b) => b.deficitAmount - a.deficitAmount);
@@ -1787,9 +1794,17 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                             return (
                               <div key={i}>
                                 <div className="flex justify-between items-end mb-1.5">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
                                     {badge}
-                                    <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                                    <div className="min-w-0">
+                                      <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                                      {item.assetName && (
+                                        <span className="hidden sm:inline text-xs font-medium text-slate-400"> · {item.assetName}</span>
+                                      )}
+                                      {item.assetName && (
+                                        <p className="sm:hidden text-[10px] font-medium text-slate-400 truncate leading-tight">{item.assetName}</p>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="text-[11px]">{statusText}</div>
                                 </div>
@@ -1941,7 +1956,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         <button onClick={() => setExpandedAsset(isOpen ? null : asset.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[10px] shadow-sm flex-shrink-0" style={{ background: catColor }}>{(asset.category || "?").slice(0, 2)}</div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-black text-slate-800 truncate">
+                            <p className="text-sm font-black text-slate-800 line-clamp-2 leading-tight">
                               {asset.parkingAsset && <span className="mr-1 text-amber-500 font-black text-[10px] bg-amber-50 px-1 py-0.5 rounded">파킹</span>}
                               {asset.name || "종목명 없음"}
                             </p>
