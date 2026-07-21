@@ -1165,7 +1165,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
     failedNames.push(a.name || a.code);
     return null;
-  });
+  }, 6, 100);
 
   setAccounts(prev => {
     if (!prev[currentAccount]) return prev;
@@ -1204,7 +1204,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
       failedNames.push(`[${accLabel}] ${a.name || a.code}`);
       return null;
-    });
+    }, 6, 100);
     accountUpdates[accKey] = updates;
   }
 
