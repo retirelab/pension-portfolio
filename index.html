@@ -272,6 +272,135 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // ── 자산 추이 SVG 라인차트 ──
+    function HistoryChart({ history, accountKey, accountMeta }) {
+      const [range, setRange] = React.useState("all"); // day/week/month/year/all
+      const [hover, setHover] = React.useState(null);
+
+      const RANGES = [
+        { key: "day", label: "일", days: 30 },
+        { key: "week", label: "주", days: 90 },
+        { key: "month", label: "월", days: 365 },
+        { key: "year", label: "년", days: 1825 },
+        { key: "all", label: "전체", days: Infinity },
+      ];
+
+      // 계좌별/통합 값 추출
+      const pick = (row) => {
+        if (accountKey === "total") {
+          return { value: row.totalValue || 0, principal: row.totalPrincipal || 0, dividend: row.totalDividend || 0 };
+        }
+        const a = (row.accounts && row.accounts[accountKey]) || {};
+        return { value: a.value || 0, principal: a.principal || 0, dividend: a.dividend || 0 };
+      };
+
+      // 기간 필터
+      const now = new Date();
+      const cutoffDays = (RANGES.find(r => r.key === range) || {}).days;
+      let rows = (history || []).filter(r => {
+        if (cutoffDays === Infinity) return true;
+        const d = new Date(r.date + "T00:00:00");
+        return (now - d) / 86400000 <= cutoffDays;
+      });
+
+      // 다운샘플링: 점이 60개 넘으면 균등 솎기
+      const MAX_PTS = 60;
+      if (rows.length > MAX_PTS) {
+        const step = Math.ceil(rows.length / MAX_PTS);
+        rows = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
+      }
+
+      const pts = rows.map(r => ({ date: r.date, ...pick(r) }));
+
+      const W = 320, H = 180, padL = 8, padR = 8, padT = 14, padB = 22;
+      const innerW = W - padL - padR, innerH = H - padT - padB;
+
+      let content;
+      if (pts.length === 0) {
+        content = <div className="text-center text-xs text-slate-400 py-12">아직 기록된 이력이 없습니다.<br/>앱을 열 때마다 하루씩 쌓입니다.</div>;
+      } else {
+        const allVals = pts.flatMap(p => [p.value, p.principal, p.dividend]);
+        const maxV = Math.max(...allVals, 1);
+        const minV = 0;
+        const n = pts.length;
+        const x = (i) => padL + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
+        const y = (v) => padT + innerH - (innerH * (v - minV)) / (maxV - minV);
+
+        const linePath = (key) => pts.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p[key]).toFixed(1)}`).join(" ");
+
+        const series = [
+          { key: "value", color: "#3b82f6", label: "평가액" },
+          { key: "principal", color: "#94a3b8", label: "원금" },
+          { key: "dividend", color: "#f59e0b", label: "배당" },
+        ];
+
+        content = (
+          <div className="relative">
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }}
+              onMouseLeave={() => setHover(null)}>
+              {/* 가로 기준선 */}
+              {[0.25, 0.5, 0.75].map((f, i) => (
+                <line key={i} x1={padL} x2={W - padR} y1={padT + innerH * f} y2={padT + innerH * f}
+                  stroke="#f1f5f9" strokeWidth="1" />
+              ))}
+              {/* 선 3개 */}
+              {series.map(s => (
+                <path key={s.key} d={linePath(s.key)} fill="none" stroke={s.color} strokeWidth="2"
+                  strokeLinejoin="round" strokeLinecap="round" />
+              ))}
+              {/* 마지막 점 강조 */}
+              {series.map(s => (
+                <circle key={s.key} cx={x(n - 1)} cy={y(pts[n - 1][s.key])} r="2.5" fill={s.color} />
+              ))}
+              {/* 호버 감지용 투명 세로 밴드 */}
+              {pts.map((p, i) => (
+                <rect key={i} x={x(i) - (innerW / Math.max(n - 1, 1)) / 2} y={padT}
+                  width={innerW / Math.max(n - 1, 1)} height={innerH} fill="transparent"
+                  onMouseEnter={() => setHover(i)} />
+              ))}
+              {/* 호버 세로선 */}
+              {hover !== null && (
+                <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT + innerH} stroke="#cbd5e1" strokeWidth="1" strokeDasharray="3 3" />
+              )}
+              {/* x축 양끝 날짜 */}
+              <text x={padL} y={H - 6} fontSize="8" fill="#94a3b8">{pts[0].date.slice(5)}</text>
+              <text x={W - padR} y={H - 6} fontSize="8" fill="#94a3b8" textAnchor="end">{pts[n - 1].date.slice(5)}</text>
+            </svg>
+            {/* 호버 툴팁 */}
+            {hover !== null && (
+              <div className="absolute top-0 left-0 right-0 bg-slate-800 text-white text-[10px] rounded-lg px-3 py-2 pointer-events-none">
+                <div className="font-bold mb-1">{pts[hover].date}</div>
+                <div className="flex justify-between gap-3"><span style={{color:"#93c5fd"}}>평가액</span><span>₩{fmt(pts[hover].value)}</span></div>
+                <div className="flex justify-between gap-3"><span style={{color:"#cbd5e1"}}>원금</span><span>₩{fmt(pts[hover].principal)}</span></div>
+                <div className="flex justify-between gap-3"><span style={{color:"#fcd34d"}}>배당</span><span>₩{fmt(pts[hover].dividend)}</span></div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <div>
+          {/* 기간 버튼 */}
+          <div className="flex gap-1 mb-3">
+            {RANGES.map(r => (
+              <button key={r.key} onClick={() => setRange(r.key)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${range === r.key ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}>
+                {r.label}
+              </button>
+            ))}
+          </div>
+          {content}
+          {/* 범례 */}
+          <div className="flex justify-center gap-4 mt-3 text-[10px] font-bold">
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#3b82f6"}}></span>평가액</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#94a3b8"}}></span>원금</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#f59e0b"}}></span>배당</span>
+          </div>
+        </div>
+      );
+    }
+
     function DonutChart({ data, title, subtitle, centerLabel = "총 비중" }) {
       const rawTotal = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
       const normalizeFactor = rawTotal > 0 ? 100 / rawTotal : 1;
@@ -578,6 +707,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const [confirmReset, setConfirmReset] = useState(false);
       const [parkingDeployRatio, setParkingDeployRatio] = useState(0); // 파킹 자산 활용 비율 상태 추가
 
+      const [historyData, setHistoryData] = useState([]);
+      const [historyReloadTick, setHistoryReloadTick] = useState(0);
+      const [historyAccount, setHistoryAccount] = useState("total");
+
       // 종목별 합산 현황 정렬 상태
       const [mergedSortKey, setMergedSortKey] = useState('value');
       // 'value' | 'returnRate' | 'returnAmt' | 'custom'
@@ -699,6 +832,16 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }, [accounts, global, isLoaded]);
 
       useEffect(() => { return () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }; }, []);
+
+      // ── 자산 이력 로딩 (그래프용) ──
+      useEffect(() => {
+        getAllHistory()
+          .then(rows => {
+            const sorted = (rows || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+            setHistoryData(sorted);
+          })
+          .catch(err => console.error("[이력] 로딩 실패:", err));
+      }, [isLoaded, historyReloadTick]);
 
       const showMsg = (type, text) => {
         setMsg({ type, text });
@@ -919,7 +1062,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         };
 
         // 오늘 날짜는 항상 덮어씀. (지난 날짜는 이 로직이 건드리지 않음 — 키가 today이므로)
-        putHistory(snapshot).catch(err => console.error("[이력] 저장 실패:", err));
+        putHistory(snapshot)
+          .then(() => setHistoryReloadTick(t => t + 1))
+          .catch(err => console.error("[이력] 저장 실패:", err));
       }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
 
 
@@ -1719,6 +1864,27 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     </div>
                   </div>
                 )}
+
+                {/* 자산 추이 그래프 */}
+                <div className={`${cardBase} p-6`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><BarChart3 size={16} /> 자산 추이</p>
+                  <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+                    {[
+                      { key: "total", label: "통합" },
+                      { key: "pension1", label: "연금저축1" },
+                      { key: "pension2", label: "연금저축2" },
+                      { key: "irp", label: "개인IRP" },
+                      { key: "dcIrp", label: "퇴직IRP" },
+                      { key: "isa", label: "ISA" },
+                    ].map(t => (
+                      <button key={t.key} onClick={() => setHistoryAccount(t.key)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${historyAccount === t.key ? "bg-indigo-500 text-white shadow-sm" : "bg-slate-100 text-slate-500"}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                  <HistoryChart history={historyData} accountKey={historyAccount} />
+                </div>
 
                 {/* 데이터 관리 (통합) */}
                 <div className={`${cardBase} p-6 space-y-3`}>
