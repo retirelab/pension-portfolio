@@ -94,7 +94,7 @@
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // items를 CONCURRENCY개씩 묶어 동시 처리하고, 묶음 사이에만 짧게 대기 (프록시 rate-limit 회피)
-const fetchWithConcurrency = async (items, worker, concurrency = 3, gapMs = 300) => {
+const fetchWithConcurrency = async (items, worker, concurrency = 6, gapMs = 100) => {
   const results = [];
   for (let i = 0; i < items.length; i += concurrency) {
     const batch = items.slice(i, i + concurrency);
@@ -503,6 +503,60 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // ── 자산 이력 저장소 (IndexedDB) ──
+    const HISTORY_DB = "retireLab_history";
+    const HISTORY_STORE = "snapshots";
+
+    function openHistoryDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(HISTORY_DB, 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(HISTORY_STORE)) {
+            db.createObjectStore(HISTORY_STORE, { keyPath: "date" });
+          }
+        };
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    function getHistoryByDate(date) {
+      return openHistoryDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, "readonly");
+        const req = tx.objectStore(HISTORY_STORE).get(date);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      }));
+    }
+
+    function putHistory(snapshot) {
+      return openHistoryDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, "readwrite");
+        tx.objectStore(HISTORY_STORE).put(snapshot);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+      }));
+    }
+
+    function getAllHistory() {
+      return openHistoryDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, "readonly");
+        const req = tx.objectStore(HISTORY_STORE).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      }));
+    }
+
+    // 로컬 기준 YYYY-MM-DD (UTC 아님 — 한국 날짜 정확)
+    function localDateKey(d) {
+      const dt = d || new Date();
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, "0");
+      const day = String(dt.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
     function App() {
       const [isLoaded, setIsLoaded] = useState(false);
       const [activeAccount, setActiveAccount] = useState("pension1");
@@ -731,8 +785,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           acc.totalValue += s.totalCurrentValue;
           acc.totalPrincipal += s.purePrincipal;
           acc.accountValues.push({ name: accounts[key].label.split(" ")[0], value: s.totalCurrentValue, color: accounts[key].color });
+          acc.accountDetail[key] = { value: s.totalCurrentValue, principal: s.purePrincipal };
           return acc;
-        }, { totalValue: 0, totalPrincipal: 0, accountValues: [] });
+        }, { totalValue: 0, totalPrincipal: 0, accountValues: [], accountDetail: {} });
         
         // ── 개별 자산 합산 (종목명 기준 병합) ──
         const assetMergeMap = {};
@@ -799,6 +854,31 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         summary.estimatedTaxRefund = Math.min(creditBase, 9000000) * (global.incomeLevel === "5500이하" ? 0.165 : 0.132);
         return summary;
       }, [accounts, global, currentYear, calcAccStats]);
+
+      // ── 앱 열 때 오늘 자 자산 이력 기록 (오늘=덮어쓰기, 지난날=동결) ──
+      useEffect(() => {
+        if (!isLoaded) return;
+        if (!reportStats || typeof reportStats.totalValue !== "number") return;
+        if (reportStats.totalValue <= 0) return; // 데이터 로드 전 0값 방지
+
+        const today = localDateKey();
+        const snapshot = {
+          date: today,
+          totalValue: Math.round(reportStats.totalValue),
+          totalPrincipal: Math.round(reportStats.totalPrincipal),
+          accounts: Object.fromEntries(
+            Object.entries(reportStats.accountDetail || {}).map(([k, v]) => [
+              k,
+              { value: Math.round(v.value), principal: Math.round(v.principal) }
+            ])
+          ),
+          updatedAt: Date.now(),
+        };
+
+        // 오늘 날짜는 항상 덮어씀. (지난 날짜는 이 로직이 건드리지 않음 — 키가 today이므로)
+        putHistory(snapshot).catch(err => console.error("[이력] 저장 실패:", err));
+      }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.accountDetail]);
+
 
       const buyLogic = useMemo(() => {
         const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
@@ -1577,7 +1657,6 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         })}
                       </div>
 
-                      {/* 합계 푸터 */}
                       <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center">
                         <span className="text-xs font-bold text-slate-500">전체 합계</span>
                         <span className="text-sm font-black text-slate-800">
