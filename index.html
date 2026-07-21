@@ -1587,6 +1587,28 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     </div>
                   </div>
                 )}
+
+                {/* 데이터 관리 (통합) */}
+                <div className={`${cardBase} p-6 space-y-3`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><Archive size={16} /> 데이터 관리</p>
+                  <button onClick={exportData} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
+                  <label className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-400 cursor-pointer active:scale-95 transition-all">
+                    <Upload size={16} /> 백업 파일 불러오기 <input type="file" accept=".json" onChange={importData} className="hidden" />
+                  </label>
+                  <div className="pt-4 mt-2 border-t border-slate-100">
+                    {confirmReset ? (
+                      <div className="flex gap-2">
+                        <button onClick={() => { localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }}
+                          className="flex-1 py-3 bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-all">예, 초기화합니다</button>
+                        <button onClick={() => setConfirmReset(false)}
+                          className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl active:scale-95 transition-all">취소</button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setConfirmReset(true)}
+                        className="w-full py-2 text-rose-400 font-bold text-xs hover:text-rose-600 transition-colors">전체 데이터 초기화 (샘플 로드)</button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2428,25 +2450,6 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <button onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
                       <RefreshCw size={16} /> 지난 연도 데이터 마감 및 이월 (현재 계좌)
                     </button>
-                  </div>
-                  <button onClick={exportData} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
-                  <label className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-400 cursor-pointer active:scale-95 transition-all">
-                    <Upload size={16} /> 백업 파일 불러오기 <input type="file" accept=".json" onChange={importData} className="hidden" />
-                  </label>
-                  
-                  {/* 안전한 초기화 버튼 */}
-                  <div className="pt-4 mt-2 border-t border-slate-100">
-                    {confirmReset ? (
-                      <div className="flex gap-2">
-                        <button onClick={() => { localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }} 
-                          className="flex-1 py-3 bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-all">예, 초기화합니다</button>
-                        <button onClick={() => setConfirmReset(false)} 
-                          className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl active:scale-95 transition-all">취소</button>
-                      </div>
-                    ) : (
-                      <button onClick={() => setConfirmReset(true)}
-                        className="w-full py-2 text-rose-400 font-bold text-xs hover:text-rose-600 transition-colors">전체 데이터 초기화 (샘플 로드)</button>
-                    )}
                   </div>
                 </div>
               </div>
