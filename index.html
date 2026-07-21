@@ -784,10 +784,21 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           const s = statsMap[key];
           acc.totalValue += s.totalCurrentValue;
           acc.totalPrincipal += s.purePrincipal;
+          acc.totalDividend += s.totalDividend;
+          acc.totalBookValue += s.totalBookValue;
           acc.accountValues.push({ name: accounts[key].label.split(" ")[0], value: s.totalCurrentValue, color: accounts[key].color });
-          acc.accountDetail[key] = { value: s.totalCurrentValue, principal: s.purePrincipal };
+          acc.accountDetail[key] = {
+            value: s.totalCurrentValue,
+            principal: s.purePrincipal,
+            dividend: s.totalDividend,
+            bookValue: s.totalBookValue,
+            bookReturnAmt: s.bookReturnAmt,
+            bookReturnRate: Number(s.bookReturnRate.toFixed(2)),
+            principalReturnAmt: s.principalReturnAmt,
+            principalReturnRate: Number(s.principalReturnRate.toFixed(2)),
+          };
           return acc;
-        }, { totalValue: 0, totalPrincipal: 0, accountValues: [], accountDetail: {} });
+        }, { totalValue: 0, totalPrincipal: 0, totalDividend: 0, totalBookValue: 0, accountValues: [], accountDetail: {} });
         
         // ── 개별 자산 합산 (종목명 기준 병합) ──
         const assetMergeMap = {};
@@ -862,14 +873,34 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         if (reportStats.totalValue <= 0) return; // 데이터 로드 전 0값 방지
 
         const today = localDateKey();
+        const rs = reportStats;
+        const totalBookReturnAmt = Math.round(rs.totalValue - rs.totalBookValue);
+        const totalPrincipalReturnAmt = Math.round(rs.totalValue - rs.totalPrincipal);
         const snapshot = {
           date: today,
-          totalValue: Math.round(reportStats.totalValue),
-          totalPrincipal: Math.round(reportStats.totalPrincipal),
+          totalValue: Math.round(rs.totalValue),
+          totalPrincipal: Math.round(rs.totalPrincipal),
+          totalDividend: Math.round(rs.totalDividend),
+          totalBookValue: Math.round(rs.totalBookValue),
+          // 평가손익(매수원가 대비)
+          bookReturnAmt: totalBookReturnAmt,
+          bookReturnRate: rs.totalBookValue > 0 ? Number(((totalBookReturnAmt / rs.totalBookValue) * 100).toFixed(2)) : 0,
+          // 누적손익(원금 대비)
+          principalReturnAmt: totalPrincipalReturnAmt,
+          principalReturnRate: rs.totalPrincipal > 0 ? Number(((totalPrincipalReturnAmt / rs.totalPrincipal) * 100).toFixed(2)) : 0,
           accounts: Object.fromEntries(
-            Object.entries(reportStats.accountDetail || {}).map(([k, v]) => [
+            Object.entries(rs.accountDetail || {}).map(([k, v]) => [
               k,
-              { value: Math.round(v.value), principal: Math.round(v.principal) }
+              {
+                value: Math.round(v.value),
+                principal: Math.round(v.principal),
+                dividend: Math.round(v.dividend || 0),
+                bookValue: Math.round(v.bookValue || 0),
+                bookReturnAmt: Math.round(v.bookReturnAmt || 0),
+                bookReturnRate: v.bookReturnRate || 0,
+                principalReturnAmt: Math.round(v.principalReturnAmt || 0),
+                principalReturnRate: v.principalReturnRate || 0,
+              }
             ])
           ),
           updatedAt: Date.now(),
@@ -877,7 +908,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
         // 오늘 날짜는 항상 덮어씀. (지난 날짜는 이 로직이 건드리지 않음 — 키가 today이므로)
         putHistory(snapshot).catch(err => console.error("[이력] 저장 실패:", err));
-      }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.accountDetail]);
+      }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
 
 
       const buyLogic = useMemo(() => {
