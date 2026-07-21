@@ -548,6 +548,18 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }));
     }
 
+    // 여러 스냅샷을 병합 저장 (같은 date는 덮어씀 = 백업 값 우선)
+    function mergeHistory(snapshots) {
+      if (!Array.isArray(snapshots) || snapshots.length === 0) return Promise.resolve(true);
+      return openHistoryDB().then(db => new Promise((resolve, reject) => {
+        const tx = db.transaction(HISTORY_STORE, "readwrite");
+        const store = tx.objectStore(HISTORY_STORE);
+        snapshots.forEach(s => { if (s && s.date) store.put(s); });
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+      }));
+    }
+
     // 로컬 기준 YYYY-MM-DD (UTC 아님 — 한국 날짜 정확)
     function localDateKey(d) {
       const dt = d || new Date();
@@ -1354,12 +1366,15 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
   else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
 };
 
-      const exportData = () => {
+      const exportData = async () => {
+        let history = [];
+        try { history = await getAllHistory(); } catch (err) { console.error("[백업] 이력 읽기 실패:", err); }
         const payload = {
-          schemaVersion: "1.1",
+          schemaVersion: "1.2",
           exportedAt: new Date().toISOString(),
           accounts,
-          global
+          global,
+          history
         };
         const a = document.createElement("a");
         a.href = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
@@ -1375,7 +1390,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               const normalizedAccounts = normalizeAccounts(d.accounts);
               setAccounts(normalizedAccounts); 
               setGlobal(d.global); 
-              showMsg("success", "통합 데이터 복구 완료!"); 
+              // 이력 병합 복구 (있을 때만 — 구버전 백업 파일은 history 없음)
+              if (Array.isArray(d.history) && d.history.length > 0) {
+                mergeHistory(d.history)
+                  .then(() => showMsg("success", `통합 데이터 복구 완료! (이력 ${d.history.length}일치 병합)`))
+                  .catch(err => { console.error("[복구] 이력 병합 실패:", err); showMsg("success", "통합 데이터 복구 완료! (이력 병합 실패)"); });
+              } else {
+                showMsg("success", "통합 데이터 복구 완료!"); 
+              }
             } else {
               throw new Error("Invalid Schema");
             }
