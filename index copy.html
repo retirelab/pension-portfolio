@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>절세 3총사 관리 대시보드</title>
   
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
+  <!-- React JSX 자동 런타임용 import map (Babel 8 automatic runtime 대응) -->
   <script type="importmap">
   {
     "imports": {
@@ -16,6 +18,7 @@
   }
   </script>
 
+  <!-- Babel CDN (브라우저에서 JSX 컴파일) -->
   <script src="https://unpkg.com/@babel/standalone@7.26.7/babel.min.js"></script>
 
   <style>
@@ -64,6 +67,7 @@
 <body class="bg-slate-50">
   <div id="root"></div>
 
+  <!-- React 앱 코드 (Babel 모듈 사용) -->
   <script type="text/babel" data-type="module">
     import React, { useState, useEffect, useRef, useMemo, useCallback } from "https://esm.sh/react@18.2.0";
     import { createRoot } from "https://esm.sh/react-dom@18.2.0/client";
@@ -76,11 +80,32 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     const fmt = (n) => {
-      const num = Number(n);
-      return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
-    };
+  const num = Number(n);
+  return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
+};
 
-    const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// items를 CONCURRENCY개씩 묶어 동시 처리하고, 묶음 사이에만 짧게 대기 (프록시 rate-limit 회피)
+const fetchWithConcurrency = async (items, worker, concurrency = 3, gapMs = 300) => {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map(worker));
+    results.push(...batchResults);
+    if (i + concurrency < items.length) await sleep(gapMs);
+  }
+  return results;
+};
+
+// 실패한 종목명 목록을 메시지용 문자열로 변환 (최대 max개까지 표시, 나머지는 "외 N건")
+const formatFailedNames = (names, max = 3) => {
+  if (names.length === 0) return "";
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} 외 ${names.length - max}건`;
+};
+
+const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
 
     // 혼합 자산군 관리용 상수
     const MIXED_ASSET_CATEGORIES = ["주식+채권"];
@@ -929,7 +954,14 @@
         const tempDeviation = currentPortfolio.map(p => {
           const gap = p.value - p.targetWeight;
           const deficitAmount = (allocationBaseValue * (p.targetWeight / 100)) - p.categoryValue;
-          return { name: p.name, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
+          const matchedAssets = curAcc.assets.filter(a => !a.parkingAsset && a.category === p.name);
+          let assetName = "";
+          if (matchedAssets.length === 1) {
+            assetName = matchedAssets[0].name || "";
+          } else if (matchedAssets.length >= 2) {
+            assetName = `${matchedAssets[0].name || "종목"} 외 ${matchedAssets.length - 1}개`;
+          }
+          return { name: p.name, assetName, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
         });
 
         tempDeviation.sort((a, b) => b.deficitAmount - a.deficitAmount);
@@ -1070,7 +1102,21 @@
         updateAcc({ assets: newAssets });
       };
 
+      const GAS_PRICE_PROXY = "https://script.google.com/macros/s/AKfycbzijpg_P0TzHc418PyTwfyny64E5cerg510hn3_WraR6kJ3gnzgh7sd8zITnZ9brN_4Jg/exec";
+
       const fetchStock = async (code) => {
+        // 1순위: 구글 Apps Script 프록시 (구글 서버가 네이버를 직접 조회 → 빠르고 안정적)
+        try {
+          const gasRes = await fetch(`${GAS_PRICE_PROXY}?code=${encodeURIComponent(code)}`);
+          if (gasRes.ok) {
+            const g = await gasRes.json();
+            if (g && g.ok && (g.price || g.name)) {
+              return { price: g.price != null ? Number(g.price) : null, name: g.name || "" };
+            }
+          }
+        } catch (e) {}
+
+        // 2순위(fallback): 기존 공용 프록시 (구글 프록시가 실패했을 때만)
         const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
         for (const proxy of [`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`]) {
           try {
@@ -1113,80 +1159,82 @@
       };
 
       const fetchAllPrices = async () => {
-        if (isFetching) return;
-        
-        setIsFetching(true); setFetchError(""); let err = false;
-        const currentAccount = activeAccount;
-        const currentAssets = accounts[currentAccount].assets;
+  if (isFetching) return;
 
-        const updates = await Promise.all(currentAssets.map(async a => {
-          if (a.code && a.code.length >= 5) { 
-            const d = await fetchStock(a.code); 
-            if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name }; 
-            err = true; 
-          }
-          return null;
-        }));
+  setIsFetching(true); setFetchError("");
+  const currentAccount = activeAccount;
+  const currentAssets = accounts[currentAccount].assets;
+  const failedNames = [];
 
-        setAccounts(prev => {
-          if (!prev[currentAccount]) return prev;
-          return {
-            ...prev,
-            [currentAccount]: {
-              ...prev[currentAccount],
-              assets: prev[currentAccount].assets.map(prevAsset => {
-                const update = updates.find(u => u && u.id === prevAsset.id);
-                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-              })
-            }
-          };
-        });
+  const codedAssets = currentAssets.filter(a => a.code && a.code.length >= 5);
+  const updates = await fetchWithConcurrency(codedAssets, async a => {
+    const d = await fetchStock(a.code);
+    if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
+    failedNames.push(a.name || a.code);
+    return null;
+  }, 6, 100);
 
-        setIsFetching(false);
-        if (err) { setFetchError("일부 종목 조회 실패"); setTimeout(() => setFetchError(""), 3000); }
-      };
+  setAccounts(prev => {
+    if (!prev[currentAccount]) return prev;
+    return {
+      ...prev,
+      [currentAccount]: {
+        ...prev[currentAccount],
+        assets: prev[currentAccount].assets.map(prevAsset => {
+          const update = updates.find(u => u && u.id === prevAsset.id);
+          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+        })
+      }
+    };
+  });
 
+  setIsFetching(false);
+  if (failedNames.length > 0) {
+    setFetchError(`조회 실패: ${formatFailedNames(failedNames)}`);
+    setTimeout(() => setFetchError(""), 5000);
+  }
+};
       const fetchAllAccountsPrices = async () => {
-        if (isFetchingAll) return;
+  if (isFetchingAll) return;
 
-        setIsFetchingAll(true);
-        let hasErr = false;
-        const accountUpdates = {};
-        
-        for (const accKey of Object.keys(accounts)) {
-          if (accKey === "report") continue;
-          const acc = accounts[accKey];
-          const updates = await Promise.all(acc.assets.map(async a => {
-            if (a.code && a.code.length >= 5) {
-              const d = await fetchStock(a.code);
-              if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
-              hasErr = true;
-            }
-            return null;
-          }));
-          accountUpdates[accKey] = updates;
-        }
-        
-        setAccounts(prev => {
-          const nextAccounts = { ...prev };
-          for (const accKey of Object.keys(accountUpdates)) {
-            if (!nextAccounts[accKey]) continue;
-            const updates = accountUpdates[accKey];
-            nextAccounts[accKey] = {
-              ...nextAccounts[accKey],
-              assets: nextAccounts[accKey].assets.map(prevAsset => {
-                const update = updates.find(u => u && u.id === prevAsset.id);
-                return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-              })
-            };
-          }
-          return nextAccounts;
-        });
+  setIsFetchingAll(true);
+  const accountUpdates = {};
+  const failedNames = [];
 
-        setIsFetchingAll(false);
-        if (hasErr) showMsg("error", "일부 계좌의 종목 갱신에 실패했습니다.");
-        else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+  for (const accKey of Object.keys(accounts)) {
+    if (accKey === "report") continue;
+    const acc = accounts[accKey];
+    const accLabel = acc.label.split(" ")[0];
+    const codedAssets = acc.assets.filter(a => a.code && a.code.length >= 5);
+    const updates = await fetchWithConcurrency(codedAssets, async a => {
+      const d = await fetchStock(a.code);
+      if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
+      failedNames.push(`[${accLabel}] ${a.name || a.code}`);
+      return null;
+    }, 6, 100);
+    accountUpdates[accKey] = updates;
+  }
+
+  setAccounts(prev => {
+    const nextAccounts = { ...prev };
+    for (const accKey of Object.keys(accountUpdates)) {
+      if (!nextAccounts[accKey]) continue;
+      const updates = accountUpdates[accKey];
+      nextAccounts[accKey] = {
+        ...nextAccounts[accKey],
+        assets: nextAccounts[accKey].assets.map(prevAsset => {
+          const update = updates.find(u => u && u.id === prevAsset.id);
+          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
+        })
       };
+    }
+    return nextAccounts;
+  });
+
+  setIsFetchingAll(false);
+  if (failedNames.length > 0) showMsg("error", `조회 실패: ${formatFailedNames(failedNames)}`);
+  else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
+};
 
       const exportData = () => {
         const payload = {
@@ -1727,7 +1775,7 @@
                               else if (item.priority === 2) badge = <span className="bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
                               else if (item.priority === 3) badge = <span className="bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[10px] font-black">{item.priority}순위</span>;
                             } else if (isSurplus) {
-                              badge = <span className="text-blue-500 font-black text-[10px]">초 초과</span>;
+                              badge = <span className="text-blue-500 font-black text-[10px]">초과</span>;
                             } else if (isBalanced) {
                               badge = <span className="text-emerald-500 font-black text-[10px]">✓</span>;
                             }
@@ -1746,9 +1794,17 @@
                             return (
                               <div key={i}>
                                 <div className="flex justify-between items-end mb-1.5">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 min-w-0">
                                     {badge}
-                                    <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                                    <div className="min-w-0">
+                                      <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                                      {item.assetName && (
+                                        <span className="hidden sm:inline text-xs font-medium text-slate-400"> · {item.assetName}</span>
+                                      )}
+                                      {item.assetName && (
+                                        <p className="sm:hidden text-[10px] font-medium text-slate-400 truncate leading-tight">{item.assetName}</p>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="text-[11px]">{statusText}</div>
                                 </div>
@@ -1900,7 +1956,7 @@
                         <button onClick={() => setExpandedAsset(isOpen ? null : asset.id)} className="w-full text-left p-4 flex items-center gap-3 hover:bg-slate-50 transition-all">
                           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[10px] shadow-sm flex-shrink-0" style={{ background: catColor }}>{(asset.category || "?").slice(0, 2)}</div>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-black text-slate-800 truncate">
+                            <p className="text-sm font-black text-slate-800 line-clamp-2 leading-tight">
                               {asset.parkingAsset && <span className="mr-1 text-amber-500 font-black text-[10px] bg-amber-50 px-1 py-0.5 rounded">파킹</span>}
                               {asset.name || "종목명 없음"}
                             </p>
