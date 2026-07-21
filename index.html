@@ -3,6 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="manifest" href="/pension-portfolio/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="절세3총사">
+  <link rel="apple-touch-icon" href="/pension-portfolio/icon-192.png">
   <title>절세 3총사 관리 대시보드</title>
   
   <!-- Tailwind CSS CDN -->
@@ -2536,6 +2543,17 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     const rootElement = document.getElementById("root");
     const root = createRoot(rootElement);
     root.render(<App />);
+  </script>
+
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("/pension-portfolio/service-worker.js", { scope: "/pension-portfolio/" })
+          .then((reg) => console.log("[PWA] 서비스 워커 등록됨:", reg.scope))
+          .catch((err) => console.error("[PWA] 서비스 워커 등록 실패:", err));
+      });
+    }
   </script>
 </body>
 </html>
