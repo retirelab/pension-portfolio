@@ -1,3 +1,4 @@
+=== index.html ===
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -710,6 +711,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const [historyData, setHistoryData] = useState([]);
       const [historyReloadTick, setHistoryReloadTick] = useState(0);
       const [historyAccount, setHistoryAccount] = useState("total");
+      const [useDividend, setUseDividend] = useState(true);
 
       // 종목별 합산 현황 정렬 상태
       const [mergedSortKey, setMergedSortKey] = useState('value');
@@ -739,10 +741,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             { id: 7, category: "금",      name: "TIGER KRX금현물",       code: "411060", quantity: 180, price: 12800, currentPrice: 13600, assetType: "안전자산" },
           ],
           contributions: [
-            { id: 1, month: "2026-01", amount: 500000, type: "입금", memo: "정기 납입" },
-            { id: 2, month: "2026-02", amount: 500000, type: "입금", memo: "정기 납입" },
-            { id: 3, month: "2026-03", amount: 500000, type: "입금", memo: "정기 납입" },
-            { id: 4, month: "2026-02", amount: 18500,  type: "배당", memo: "S&P500 분배금" },
+            { id: 1, month: "2026-01-01", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 2, month: "2026-02-01", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 3, month: "2026-03-01", amount: 500000, type: "입금", memo: "정기 납입" },
+            { id: 4, month: "2026-02-01", amount: 18500,  type: "배당", memo: "S&P500 분배금" },
           ],
           pastContributions: [{ id: 1, year: 2024, amount: 6000000, dividend: 120000 }, { id: 2, year: 2025, amount: 6000000, dividend: 310000 }],
         },
@@ -755,7 +757,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             { id: 3, category: "금",         name: "TIGER KRX금현물",           code: "411060", quantity: 90,  price: 12800, currentPrice: 13600, assetType: "안전자산" },
             { id: 4, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 120, price: 10200, currentPrice: 10250, assetType: "안전자산" },
           ],
-          contributions: [{ id: 1, month: "2026-01", amount: 300000, type: "입금", memo: "초과납입" }, { id: 2, month: "2026-02", amount: 300000, type: "입금", memo: "초과납입" }, { id: 3, month: "2026-03", amount: 300000, type: "입금", memo: "초과납입" }],
+          contributions: [{ id: 1, month: "2026-01-01", amount: 300000, type: "입금", memo: "초과납입" }, { id: 2, month: "2026-02-01", amount: 300000, type: "입금", memo: "초과납입" }, { id: 3, month: "2026-03-01", amount: 300000, type: "입금", memo: "초과납입" }],
           pastContributions: [{ id: 1, year: 2025, amount: 3600000, dividend: 85000 }],
         },
         irp: {
@@ -766,7 +768,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             { id: 2, category: "미국채권",   name: "ACE 미국30년국채액티브",    code: "449180", quantity: 150, price: 9500,  currentPrice: 9200,  assetType: "안전자산" },
             { id: 3, category: "현금/단기채",name: "TIGER 단기채권액티브",       code: "157450", quantity: 80,  price: 10200, currentPrice: 10250, assetType: "안전자산" },
           ],
-          contributions: [{ id: 1, month: "2026-01", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 2, month: "2026-02", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 3, month: "2026-03", amount: 250000, type: "입금", memo: "IRP 납입" }],
+          contributions: [{ id: 1, month: "2026-01-01", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 2, month: "2026-02-01", amount: 250000, type: "입금", memo: "IRP 납입" }, { id: 3, month: "2026-03-01", amount: 250000, type: "입금", memo: "IRP 납입" }],
           pastContributions: [{ id: 1, year: 2024, amount: 3000000, dividend: 60000 }, { id: 2, year: 2025, amount: 3000000, dividend: 95000 }],
         },
         dcIrp: createDefaultDcIrp(),
@@ -779,7 +781,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             { id: 3, category: "금",         name: "TIGER KRX금현물",                 code: "411060", quantity: 200, price: 12000, currentPrice: 13600, assetType: "안전자산" },
             { id: 4, category: "현금/단기채",name: "TIGER 단기채권액티브",             code: "157450", quantity: 300, price: 10150, currentPrice: 10250, assetType: "안전자산" },
           ],
-          contributions: [{ id: 1, month: "2026-01", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 2, month: "2026-02", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 3, month: "2026-03", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 4, month: "2026-02", amount: 32000, type: "배당", memo: "커버드콜 분배금" }],
+          contributions: [{ id: 1, month: "2026-01-01", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 2, month: "2026-02-01", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 3, month: "2026-03-01", amount: 500000, type: "입금", memo: "ISA 납입" }, { id: 4, month: "2026-02-01", amount: 32000, type: "배당", memo: "커버드콜 분배금" }],
           pastContributions: [{ id: 1, year: 2024, amount: 6000000, dividend: 180000 }, { id: 2, year: 2025, amount: 12000000, dividend: 520000 }],
         },
       });
@@ -873,7 +875,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const activeCash = acc.contributions.filter(c => c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const activeDividend = acc.contributions.filter(c => c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const currentMonthStr = `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-        const thisMonthDividend = acc.contributions.filter(c => c.month === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+        const thisMonthDividend = acc.contributions.filter(c => String(c.month || "").slice(0, 7) === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         
         const employerCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "회사부담금").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const personalCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입").reduce((s, c) => s + (Number(c.amount) || 0), 0);
@@ -924,7 +926,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }, [currentYear]);
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
-      const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (stats.thisMonthDividend || 0);
+      const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (useDividend ? (stats.thisMonthDividend || 0) : 0);
       const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
 
       const reportStats = useMemo(() => {
@@ -1250,7 +1252,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
         // buyLogic 반환 객체에 deployParkingCash 및 deployCash 추가 전달
         return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: normalRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash };
-      }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio]);
+      }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio, useDividend]);
 
       // 종목별 합산 현황 표시용 정렬 결과
       const sortedMergedAssets = useMemo(() => {
@@ -1501,7 +1503,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           const update = updates.find(u => u && u.id === prevAsset.id);
           return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
         })
-      };
+      }
     }
     return nextAccounts;
   });
@@ -2175,10 +2177,16 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                               <input type="number" value={curAcc.monthlyInput === 0 ? "" : curAcc.monthlyInput} onChange={e => updateAcc({ monthlyInput: Number(e.target.value) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
                             </div>
                             {stats.thisMonthDividend > 0 && (
-                              <div className="flex justify-between items-center bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs font-bold text-amber-800">
-                                <span className="flex items-center gap-1.5"><Coins size={14} /> 이달 배당금 자동 합산</span>
-                                <span>+₩{fmt(stats.thisMonthDividend)}</span>
-                              </div>
+                              <button type="button" onClick={() => setUseDividend(v => !v)}
+                                className={`w-full flex justify-between items-center border rounded-xl px-4 py-3 text-xs font-bold transition-all active:scale-95 ${useDividend ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
+                                <span className="flex items-center gap-1.5">
+                                  <Coins size={14} /> 이달 배당금 자동 합산
+                                  <span className={`ml-1 px-1.5 py-0.5 rounded text-[9px] ${useDividend ? "bg-amber-200 text-amber-900" : "bg-slate-200 text-slate-500"}`}>
+                                    {useDividend ? "ON" : "OFF"}
+                                  </span>
+                                </span>
+                                <span className={useDividend ? "" : "line-through"}>+₩{fmt(stats.thisMonthDividend)}</span>
+                              </button>
                             )}
                             
                             {/* 추가된 파킹 자산 활용 슬라이더 */}
@@ -2486,7 +2494,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <button onClick={() => { 
                       const id = Date.now(); 
                       const defaultType = activeAccount === "dcIrp" ? "회사부담금" : "입금";
-                      updateAcc({ contributions: [...curAcc.contributions, { id, month: `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, amount: 0, type: defaultType, memo: "" }] }); 
+                      const _t = new Date();
+                      const _today = `${_t.getFullYear()}-${String(_t.getMonth() + 1).padStart(2, '0')}-${String(_t.getDate()).padStart(2, '0')}`;
+                      updateAcc({ contributions: [...curAcc.contributions, { id, month: _today, amount: 0, type: defaultType, memo: "" }] }); 
                       setExpandedContrib(id); 
                     }}
                       className="px-4 py-2 bg-slate-900 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-all">추가</button>
@@ -2509,7 +2519,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                           </button>
                           {expandedContrib === item.id && (
                             <div className="p-5 bg-slate-50 border-t border-slate-100 grid grid-cols-2 gap-3 shadow-inner">
-                              <div><label className="block text-[10px] font-bold text-slate-400 mb-1">연월</label><input type="month" value={item.month} onChange={e => chContrib(item.id, "month", e.target.value)} className={inpBase} /></div>
+                              <div><label className="block text-[10px] font-bold text-slate-400 mb-1">날짜</label><input type="date" value={(item.month || "").length === 7 ? `${item.month}-01` : item.month} onChange={e => chContrib(item.id, "month", e.target.value)} className={inpBase} /></div>
                               <div>
                                 <label className="block text-[10px] font-bold text-slate-400 mb-1">유형</label>
                                 <select value={item.type} onChange={e => chContrib(item.id, "type", e.target.value)} className={inpBase}>
@@ -2528,7 +2538,21 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                 </select>
                               </div>
                               <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">금액 (₩)</label><input type="number" value={item.amount === 0 ? "" : item.amount} onChange={e => chContrib(item.id, "amount", Number(e.target.value))} className={`${inpBase} text-right font-black text-base`} /></div>
-                              <div className="col-span-2"><label className="block text-[10px] font-bold text-slate-400 mb-1">설명</label><input type="text" value={item.memo} placeholder="설명 입력" onChange={e => chContrib(item.id, "memo", e.target.value)} className={inpBase} /></div>
+                              <div className="col-span-2">
+                                <label className="block text-[10px] font-bold text-slate-400 mb-1">설명</label>
+                                <input type="text" value={item.memo} placeholder="설명 입력" onChange={e => chContrib(item.id, "memo", e.target.value)} className={inpBase} />
+                                {item.type === "배당" && curAcc.assets.filter(a => !a.parkingAsset && a.name).length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 mt-2">
+                                    {curAcc.assets.filter(a => !a.parkingAsset && a.name).map(a => (
+                                      <button key={a.id} type="button"
+                                        onClick={() => chContrib(item.id, "memo", a.name)}
+                                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all active:scale-95 ${item.memo === a.name ? "bg-indigo-500 text-white border-indigo-500" : "bg-white text-slate-500 border-slate-200"}`}>
+                                        {a.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                               <button onClick={() => updateAcc({ contributions: curAcc.contributions.filter(c => c.id !== item.id) })} className="col-span-2 py-3 text-rose-500 bg-rose-50 rounded-xl text-xs font-bold border border-rose-100">삭제하기</button>
                             </div>
                           )}
