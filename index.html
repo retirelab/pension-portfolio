@@ -220,6 +220,87 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return next;
     };
 
+    const ACCOUNT_KEYS = ["pension1", "pension2", "irp", "dcIrp", "isa"];
+    const STORAGE_KEY = "retireLab_state_v4";
+    const isRecord = v => v !== null && typeof v === "object" && !Array.isArray(v);
+    const finiteNonnegative = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
+    const validDate = (value, allowMonth = false) => {
+      if (typeof value !== "string" || !(allowMonth ? /^\d{4}-\d{2}(?:-\d{2})?$/ : /^\d{4}-\d{2}-\d{2}$/).test(value)) return false;
+      const [y, m, day = 1] = value.split("-").map(Number);
+      const d = new Date(y, m - 1, day);
+      return y >= 1900 && d.getFullYear() === y && d.getMonth() === m - 1 && d.getDate() === day;
+    };
+    function validateState(raw, settings) {
+      if (!isRecord(raw) || !isRecord(settings) || typeof settings.userName !== "string" || !["5500이하", "5500초과"].includes(settings.incomeLevel)) throw new Error("계좌 또는 사용자 설정을 확인해주세요.");
+      for (const key of ACCOUNT_KEYS.filter(k => k !== "dcIrp" || raw[k] !== undefined)) {
+        const a = raw[key];
+        if (!isRecord(a) || typeof a.label !== "string" || !Array.isArray(a.assets) || !Array.isArray(a.contributions) || !Array.isArray(a.pastContributions) || !Array.isArray(a.targetPortfolio)) throw new Error(`${key}: 필수 계좌 항목이 없습니다.`);
+        if (!Number.isInteger(a.rebalanceMonth) || a.rebalanceMonth < 1 || a.rebalanceMonth > 12 || !Number.isInteger(a.rebalanceDay) || a.rebalanceDay < 1 || a.rebalanceDay > 31 || !finiteNonnegative(a.monthlyInput) || !finiteNonnegative(a.limit)) throw new Error(`${key}: 계좌 설정 값이 올바르지 않습니다.`);
+        const ids = new Set();
+        for (const asset of a.assets) {
+          if (!isRecord(asset) || !["string", "number"].includes(typeof asset.id) || ids.has(asset.id) || typeof asset.name !== "string" || typeof asset.category !== "string" || typeof asset.code !== "string" || !Number.isInteger(asset.quantity) || asset.quantity < 0 || !finiteNonnegative(asset.price) || !finiteNonnegative(asset.currentPrice) || (asset.stockRatio !== undefined && (!finiteNonnegative(asset.stockRatio) || asset.stockRatio > 100))) throw new Error(`${key}: 종목 수량·가격·식별자를 확인해주세요.`);
+          ids.add(asset.id);
+        }
+        for (const c of a.contributions) if (!isRecord(c) || !validDate(c.month, true) || !finiteNonnegative(c.amount) || !["입금", "개인추가납입", "회사부담금", "배당"].includes(c.type)) throw new Error(`${key}: 납입 날짜 또는 금액을 확인해주세요.`);
+        const years = new Set();
+        for (const c of a.pastContributions) {
+          if (!isRecord(c) || !Number.isInteger(c.year) || c.year < 1900 || years.has(c.year) || !finiteNonnegative(c.amount) || !finiteNonnegative(c.dividend)) throw new Error(`${key}: 과거 합계가 올바르지 않습니다.`);
+          years.add(c.year);
+        }
+        for (const t of a.targetPortfolio) if (!isRecord(t) || typeof t.name !== "string" || !finiteNonnegative(t.value) || t.value > 100) throw new Error(`${key}: 목표 비중을 확인해주세요.`);
+      }
+      const accounts = normalizeAccounts(raw);
+      if (raw.dcIrp === undefined) accounts.dcIrp = { ...createDefaultDcIrp(), assets: [], contributions: [], pastContributions: [], monthlyInput: 0 };
+      return { accounts, global: { ...settings } };
+    }
+    function validateBackup(d) {
+      if (!isRecord(d) || !["1.0", "1.1", "1.2"].includes(String(d.schemaVersion))) throw new Error("지원하지 않는 백업 버전입니다.");
+      const state = validateState(d.accounts, d.global);
+      const history = d.history === undefined ? [] : d.history;
+      if (!Array.isArray(history)) throw new Error("자산 이력이 올바르지 않습니다.");
+      const dates = new Set();
+      for (const row of history) {
+        if (!isRecord(row) || !validDate(row.date) || dates.has(row.date) || !isRecord(row.accounts)) throw new Error("자산 이력 날짜 또는 계좌가 올바르지 않습니다.");
+        dates.add(row.date);
+        for (const field of ["totalValue", "totalPrincipal", "totalDividend"]) if (!finiteNonnegative(row[field])) throw new Error("자산 이력 합계가 올바르지 않습니다.");
+        for (const a of Object.values(row.accounts)) if (!isRecord(a) || !finiteNonnegative(a.value) || !finiteNonnegative(a.principal) || !finiteNonnegative(a.dividend)) throw new Error("계좌별 이력이 올바르지 않습니다.");
+      }
+      return { ...state, history };
+    }
+    function saveState(accounts, global) {
+      // 하나의 키에 기록하므로 계좌와 설정이 따로 저장되는 문제를 방지합니다.
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ accounts, global }));
+    }
+    function downloadJson(payload, filename) {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      const a = document.createElement("a"); a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+    function contributionTotals(acc) {
+      return {
+        principal: acc.pastContributions.reduce((n, x) => n + x.amount, 0) + acc.contributions.filter(x => x.type !== "배당").reduce((n, x) => n + x.amount, 0),
+        dividend: acc.pastContributions.reduce((n, x) => n + x.dividend, 0) + acc.contributions.filter(x => x.type === "배당").reduce((n, x) => n + x.amount, 0)
+      };
+    }
+    function settleAccount(acc, year) {
+      const older = acc.contributions.filter(c => Number(c.month.slice(0, 4)) < year);
+      if (!older.length) throw new Error("마감할 과거 연도 데이터가 없습니다.");
+      // 이미 누적합계에 포함된 금액인지 알 수 없는 중복 연도는 삭제하지 않고 중단합니다.
+      if (older.some(c => acc.pastContributions.some(p => p.year === Number(c.month.slice(0, 4))))) throw new Error("과거 합계와 월별 내역에 같은 연도가 있습니다. 중복 여부 확인 전에는 마감할 수 없습니다.");
+      const sums = new Map();
+      older.forEach(c => {
+        const y = Number(c.month.slice(0, 4));
+        const v = sums.get(y) || { id: `settled-${y}`, year: y, amount: 0, dividend: 0 };
+        if (c.type === "배당") v.dividend += c.amount; else v.amount += c.amount;
+        sums.set(y, v);
+      });
+      const next = { ...acc, pastContributions: [...acc.pastContributions, ...sums.values()], contributions: acc.contributions.filter(c => Number(c.month.slice(0, 4)) >= year) };
+      const before = contributionTotals(acc), after = contributionTotals(next);
+      if (Math.abs(before.principal - after.principal) > 0.001 || Math.abs(before.dividend - after.dividend) > 0.001) throw new Error("마감 전후 합계가 달라 작업을 중단했습니다.");
+      return next;
+    }
+
     // 파킹형 자산 및 분리 계산용 Helper 함수
     const isParkingAsset = (a) => Boolean(a.parkingAsset);
     const getAssetMarketValue = (a) => (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
@@ -700,6 +781,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
     function App() {
       const [isLoaded, setIsLoaded] = useState(false);
+      const [loadError, setLoadError] = useState("");
+      const [saveError, setSaveError] = useState("");
+      const [isRestoring, setIsRestoring] = useState(false);
+      const [isSettling, setIsSettling] = useState(false);
       const [activeAccount, setActiveAccount] = useState("pension1");
       const [activeTab, setActiveTab] = useState("dashboard");
       const [dDay, setDDay] = useState(0);
@@ -815,22 +900,26 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       useEffect(() => {
         try {
-          const storedAccounts = localStorage.getItem("retireLab_accounts_v3");
-          const storedGlobal = localStorage.getItem("retireLab_global_v3");
-          if (storedAccounts && storedGlobal) { 
-            const parsedAccounts = normalizeAccounts(JSON.parse(storedAccounts));
-            setAccounts(parsedAccounts); 
-            setGlobal(JSON.parse(storedGlobal)); 
+          const envelope = localStorage.getItem(STORAGE_KEY);
+          const legacyAccounts = localStorage.getItem("retireLab_accounts_v3");
+          const legacyGlobal = localStorage.getItem("retireLab_global_v3");
+          if (envelope || legacyAccounts || legacyGlobal) {
+            if (!envelope && (!legacyAccounts || !legacyGlobal)) throw new Error("저장된 계좌 또는 설정이 누락됐습니다.");
+            const raw = envelope ? JSON.parse(envelope) : { accounts: JSON.parse(legacyAccounts), global: JSON.parse(legacyGlobal) };
+            const state = validateState(raw.accounts, raw.global);
+            setAccounts(state.accounts); setGlobal(state.global);
           }
-        } catch (e) {}
-        setIsLoaded(true);
+          setIsLoaded(true);
+        } catch (error) {
+          setLoadError(`저장 데이터를 읽지 못했습니다. 원본을 보존하고 자동 저장을 중단했습니다. ${error.message}`);
+        }
       }, []);
 
       useEffect(() => {
-        if (!isLoaded) return;
-        localStorage.setItem("retireLab_accounts_v3", JSON.stringify(accounts));
-        localStorage.setItem("retireLab_global_v3", JSON.stringify(global));
-      }, [accounts, global, isLoaded]);
+        if (!isLoaded || loadError || isRestoring) return;
+        try { saveState(accounts, global); setSaveError(""); }
+        catch (error) { setSaveError("변경사항을 저장하지 못했습니다. 백업 파일을 내려받아 보관해주세요."); }
+      }, [accounts, global, isLoaded, loadError, isRestoring]);
 
       useEffect(() => { return () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }; }, []);
 
@@ -1513,92 +1602,64 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 };
 
       const exportData = async () => {
-        let history = [];
-        try { history = await getAllHistory(); } catch (err) { console.error("[백업] 이력 읽기 실패:", err); }
-        const payload = {
-          schemaVersion: "1.2",
-          exportedAt: new Date().toISOString(),
-          accounts,
-          global,
-          history
-        };
-        const a = document.createElement("a");
-        a.href = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
-        a.download = `절세3총사_백업_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+        const history = await getAllHistory();
+        downloadJson({ schemaVersion: "1.2", exportedAt: new Date().toISOString(), accounts, global, history }, `절세3총사_백업_${localDateKey()}.json`);
+      };
+      const onExport = async () => {
+        try { await exportData(); showMsg("success", "백업 파일 다운로드를 요청했습니다."); }
+        catch (error) { showMsg("error", "이력을 읽지 못해 전체 백업을 중단했습니다. 다시 시도해주세요."); }
+      };
+      const exportRawStorage = () => {
+        try { downloadJson({ savedState: localStorage.getItem(STORAGE_KEY), accountsV3: localStorage.getItem("retireLab_accounts_v3"), globalV3: localStorage.getItem("retireLab_global_v3") }, `절세3총사_원본저장데이터_${localDateKey()}.json`); }
+        catch (error) { setLoadError("저장소에 접근할 수 없습니다. 브라우저 저장소 설정을 확인해주세요."); }
+      };
+      const importData = async (e) => {
+        const file = e.target.files[0]; e.target.value = "";
+        if (!file || isRestoring) return;
+        setIsRestoring(true);
+        try {
+          if (file.size > 20 * 1024 * 1024) throw new Error("백업 파일은 20MB 이하만 지원합니다.");
+          const restored = validateBackup(JSON.parse(await file.text()));
+          if (loadError) exportRawStorage(); else await exportData();
+          // 기록 전 실패하면 기존 계좌 상태를 바꾸지 않습니다.
+          saveState(restored.accounts, restored.global);
+          setAccounts(restored.accounts); setGlobal(restored.global);
+          setLoadError(""); setSaveError(""); setIsLoaded(true);
+          try {
+            await mergeHistory(restored.history);
+            setHistoryReloadTick(t => t + 1);
+            showMsg("success", `계좌 복구 완료! 이력 ${restored.history.length}일치 병합`);
+          } catch (error) { showMsg("error", "계좌는 복구됐지만 이력 복구에 실패했습니다. 백업 파일을 보관하고 다시 시도해주세요."); }
+        } catch (error) {
+          const message = `복원을 중단했습니다. ${error.message}`;
+          if (loadError) setLoadError(message); else showMsg("error", message);
+        } finally { setIsRestoring(false); }
+      };
+      const doSettle = async () => {
+        if (isSettling) return;
+        setIsSettling(true);
+        try {
+          const key = activeAccount;
+          const next = settleAccount(curAcc, currentYear);
+          await exportData();
+          const nextAccounts = { ...accounts, [key]: next };
+          saveState(nextAccounts, global);
+          setAccounts(nextAccounts);
+          showMsg("success", "원금·배당 합계를 유지하며 과거 연도를 마감했습니다.");
+        } catch (error) { showMsg("error", `마감을 중단했습니다. ${error.message}`); }
+        finally { setIsSettling(false); }
       };
 
-      const importData = (e) => {
-        const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-        r.onload = (ev) => {
-          try { 
-            const d = JSON.parse(ev.target.result); 
-            if (d.accounts && typeof d.accounts === 'object' && d.global && typeof d.global === 'object' && d.schemaVersion) { 
-              const normalizedAccounts = normalizeAccounts(d.accounts);
-              setAccounts(normalizedAccounts); 
-              setGlobal(d.global); 
-              // 이력 병합 복구 (있을 때만 — 구버전 백업 파일은 history 없음)
-              if (Array.isArray(d.history) && d.history.length > 0) {
-                mergeHistory(d.history)
-                  .then(() => showMsg("success", `통합 데이터 복구 완료! (이력 ${d.history.length}일치 병합)`))
-                  .catch(err => { console.error("[복구] 이력 병합 실패:", err); showMsg("success", "통합 데이터 복구 완료! (이력 병합 실패)"); });
-              } else {
-                showMsg("success", "통합 데이터 복구 완료!"); 
-              }
-            } else {
-              throw new Error("Invalid Schema");
-            }
-          } catch { 
-            showMsg("error", "올바른 구조의 백업 파일이 아닙니다."); 
-          }
-        };
-        r.readAsText(file); e.target.value = "";
-      };
-
-      const doSettle = () => {
-        const toSettle = curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) < currentYear);
-        
-        if (toSettle.length === 0) {
-          showMsg("error", "마감할 과거 연도 데이터가 없습니다.");
-          return;
-        }
-
-        const unSettled = toSettle.filter(c => {
-          const y = parseInt(c.month.split("-")[0], 10);
-          return !curAcc.pastContributions.some(p => p.year === y);
-        });
-
-        if (unSettled.length === 0) {
-          showMsg("error", "이미 모든 과거 연도 데이터가 마감되었습니다.");
-          return;
-        }
-
-        const yearsProcessed = new Set();
-        exportData();
-
-        const sums = {};
-        const PRINCIPAL_TYPES = ["입금", "개인추가납입", "회사부담금"];
-        unSettled.forEach(c => {
-          const y = parseInt(c.month.split("-")[0], 10); 
-          yearsProcessed.add(y);
-          if (!sums[y]) sums[y] = { amount: 0, dividend: 0 };
-          if (PRINCIPAL_TYPES.includes(c.type)) sums[y].amount += Number(c.amount || 0); 
-          else if (c.type === "배당") sums[y].dividend += Number(c.amount || 0);
-        });
-
-        let np = curAcc.pastContributions.map(p => ({ ...p }));
-        Object.entries(sums).forEach(([y, v]) => {
-          const yn = parseInt(y, 10); 
-          np.push({ id: Date.now() + Math.random(), year: yn, ...v }); 
-        });
-
-        updateAcc({ 
-          pastContributions: np, 
-          contributions: curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) >= currentYear) 
-        });
-        
-        showMsg("success", `총 ${yearsProcessed.size}개 연도 데이터가 성공적으로 이월되었습니다.`);
-      };
-
+      if (loadError) return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+          <div className="max-w-md bg-white p-6 rounded-2xl border border-rose-200 space-y-4">
+            <h1 className="font-black text-rose-700">데이터 복구가 필요합니다</h1>
+            <p className="text-sm text-slate-700">{loadError}</p>
+            <button onClick={exportRawStorage} className="w-full py-3 bg-slate-900 text-white rounded-xl">원본 저장 데이터 내려받기</button>
+            <label className="block text-center py-3 bg-indigo-50 rounded-xl text-indigo-700">{isRestoring ? "복원 중…" : "정상 백업 파일로 복원"}<input disabled={isRestoring} type="file" accept=".json" onChange={importData} className="hidden" /></label>
+          </div>
+        </div>
+      );
       if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">로딩 중...</div>;
 
       const cardBase = "bg-white rounded-2xl border border-slate-200 shadow-sm";
@@ -1649,6 +1710,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </header>
           )}
 
+          {saveError && <div className="mx-4 my-3 p-4 bg-rose-50 text-rose-700 rounded-xl text-sm">{saveError}<button onClick={onExport} className="ml-2 underline font-bold">백업</button></div>}
           <main className="max-w-4xl mx-auto px-4 mt-4 space-y-6">
 
             {/* 통합 리포트 */}
@@ -1891,14 +1953,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 {/* 데이터 관리 (통합) */}
                 <div className={`${cardBase} p-6 space-y-3`}>
                   <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><Archive size={16} /> 데이터 관리</p>
-                  <button onClick={exportData} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
+                  <button onClick={onExport} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
                   <label className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-400 cursor-pointer active:scale-95 transition-all">
                     <Upload size={16} /> 백업 파일 불러오기 <input type="file" accept=".json" onChange={importData} className="hidden" />
                   </label>
                   <div className="pt-4 mt-2 border-t border-slate-100">
                     {confirmReset ? (
                       <div className="flex gap-2">
-                        <button onClick={() => { localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }}
+                        <button onClick={() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }}
                           className="flex-1 py-3 bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-all">예, 초기화합니다</button>
                         <button onClick={() => setConfirmReset(false)}
                           className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl active:scale-95 transition-all">취소</button>
@@ -2769,7 +2831,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       <p className="text-[10px] font-bold text-slate-400 uppercase">연도 마감 및 이월</p>
                       <Tip text={"작년까지의 월별 납입 내역을 '과거 누적 합계'로 압축합니다.\n\n• 실행 전 자동으로 JSON 백업이 저장됩니다.\n• 현재 계좌에만 적용됩니다.\n• 올해 데이터는 그대로 유지됩니다."} />
                     </div>
-                    <button onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
+                    <button disabled={isSettling} onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
                       <RefreshCw size={16} /> 지난 연도 데이터 마감 및 이월 (현재 계좌)
                     </button>
                   </div>
