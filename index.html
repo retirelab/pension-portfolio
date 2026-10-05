@@ -86,6 +86,19 @@
       GripVertical
     } from "https://esm.sh/lucide-react@0.292.0";
 
+    const APP_VERSION = "1.6.0";
+    const APP_UPDATED_AT = "2026-10-05";
+    const cumulativeReturnRate = (value, principal) => {
+      if (!Number.isFinite(value) || !Number.isFinite(principal) || principal <= 0) return null;
+      const rate = (value - principal) / principal * 100;
+      return Number.isFinite(rate) ? rate : null;
+    };
+    const formatReturnRate = (rate) => {
+      if (rate === null) return "—";
+      const rounded = Number(rate.toFixed(2));
+      return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}%`;
+    };
+
     const fmt = (n) => {
   const num = Number(n);
   return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
@@ -1176,6 +1189,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           return acc;
         }, { totalValue: 0, totalPrincipal: 0, totalDividend: 0, totalBookValue: 0, accountValues: [], accountDetail: {} });
         
+        summary.totalReturnRate = cumulativeReturnRate(summary.totalValue, summary.totalPrincipal);
+
         // 종목코드로 합산하고 코드가 없는 직접입력 자산은 별도로 유지합니다.
         summary.mergedAssets = mergeAccountAssets(accounts, allKeys);
         summary.totalMergedValue = summary.mergedAssets.reduce((n, a) => n + a.totalMarketValue, 0);
@@ -1606,6 +1621,15 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         {(reportStats.totalValue - reportStats.totalPrincipal) >= 0 ? '+' : ''}
                         {fmt(reportStats.totalValue - reportStats.totalPrincipal)}원
                       </p>
+                    </div>
+                    <div className="col-span-2 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                        총 누적 수익률
+                        <Tip text={"총 누적 손익 ÷ 총 납입 원금 × 100\n\n납입 원금 대비 단순 누적 수익률입니다. 연환산 수익률은 아닙니다. 자산에 반영된 배당은 중복으로 더하지 않습니다. 원금이 없으면 —로 표시합니다."} />
+                      </span>
+                      <span className={`text-xl font-black ${reportStats.totalReturnRate > 0 ? 'text-rose-500' : reportStats.totalReturnRate < 0 ? 'text-blue-500' : 'text-slate-700'}`}>
+                        {formatReturnRate(reportStats.totalReturnRate)}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -2671,6 +2695,19 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     </button>
                   </div>
                 </div>
+                <details className={`${cardBase} p-5 text-xs text-slate-500`}>
+                  <summary className="cursor-pointer font-bold leading-6">
+                    앱 버전 v{APP_VERSION} · 업데이트 {APP_UPDATED_AT}
+                  </summary>
+                  <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
+                    <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>통합 자산 요약에 총 누적 수익률 추가</li>
+                      <li>납입 원금이 없는 경우 수익률을 —로 표시</li>
+                      <li>설정에 앱 버전, 업데이트 날짜 및 변경사항 표시</li>
+                    </ul>
+                  </div>
+                </details>
               </div>
             )}
           </main>
