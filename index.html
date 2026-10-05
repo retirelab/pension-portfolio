@@ -86,7 +86,8 @@
       GripVertical
     } from "https://esm.sh/lucide-react@0.292.0";
 
-    const APP_VERSION = "1.6.1";
+    // @section release | 버전·수익률·공통 도구
+    const APP_VERSION = "1.6.2";
     const APP_UPDATED_AT = "2026-10-05";
     const cumulativeReturnRate = (value, principal) => {
       if (!Number.isFinite(value) || !Number.isFinite(principal) || principal <= 0) return null;
@@ -128,6 +129,7 @@ const formatFailedNames = (names, max = 3) => {
 const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
 
     // 혼합 자산군 관리용 상수
+    // @section presets | 자산 분류·기본 계좌
     const MIXED_ASSET_CATEGORIES = ["주식+채권"];
 
     // 공통 자산군 프리셋 목록
@@ -233,6 +235,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return next;
     };
 
+    // @section state-validation | 저장 데이터 검증·원금 마감
     const ACCOUNT_KEYS = ["pension1", "pension2", "irp", "dcIrp", "isa"];
     const STORAGE_KEY = "retireLab_state_v4";
     const isRecord = v => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -317,6 +320,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // 파킹형 자산 및 분리 계산용 Helper 함수
+    // @section asset-math | 자산 평가·위험자산·리밸런싱 날짜
     const isParkingAsset = (a) => Boolean(a.parkingAsset);
     const getAssetMarketValue = (a) => (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
     const getParkingAssetValue = (assets) => assets.filter(isParkingAsset).reduce((sum, a) => sum + getAssetMarketValue(a), 0);
@@ -338,6 +342,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return { date: localDateKey(target), days: Math.round((utcDay(target) - utcDay(today)) / 86400000) };
     }
 
+    // @section order-plan | 매수·매도·수수료 계획
     const ORDER_FEE_RATE = 0.002; // 수수료 여유금; 실제 증권사 수수료와 다를 수 있음
     const isCashAsset = a => isParkingAsset(a) && !String(a.code || "").trim() && a.name.trim() === "예수금";
     const getCashValue = assets => assets.filter(isCashAsset).reduce((n, a) => n + getAssetMarketValue(a), 0);
@@ -443,6 +448,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, fullRemainingCash: fullBuys.remainingCash };
     }
 
+    // @section tip | 공통 도움말
     function Tip({ text }) {
       const [show, setShow] = useState(false);
       const ref = useRef(null);
@@ -473,6 +479,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // ── 자산 추이 SVG 라인차트 ──
+    // @section aggregation | 종목코드별 계좌 합산
     function mergeAccountAssets(accounts, keys = ACCOUNT_KEYS) {
       const grouped = new Map();
       for (const accountKey of keys) {
@@ -501,6 +508,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         color: a.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length], priceMismatch: a.prices.size > 1
       }));
     }
+    // @section quote-status | 가격 갱신 상태
     function quoteStatus(asset, now = new Date()) {
       if (!String(asset.code || "").trim()) return { text: "수동 입력", today: false };
       const failed = Number.isFinite(Date.parse(asset.priceFetchFailedAt));
@@ -512,6 +520,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return { text: `${failed ? "조회 실패 · 마지막 성공 " : "조회 "}${date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`, today: today && !failed };
     }
 
+    // @section history-chart | 자산 추이 계산·차트
     function historyPoints(history, accountKey, days, now = new Date()) {
       const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
       const byDate = new Map();
@@ -591,6 +600,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // @section charts | 비중 차트·수익 배지
     function DonutChart({ data, title, subtitle, centerLabel = "총 비중" }) {
       const rawTotal = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
       const normalizeFactor = rawTotal > 0 ? 100 / rawTotal : 1;
@@ -648,6 +658,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // @section selectors | 목표비중·자산 선택 컴포넌트
     function TargetCategorySelector({ t, i, curAcc, updateAcc }) {
       const [showDropdown, setShowDropdown] = useState(false);
       const [customMode, setCustomMode] = useState(false);
@@ -823,6 +834,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // ── 자산 이력 저장소 (IndexedDB) ──
+    // @section history-storage | IndexedDB 이력 저장·날짜 키
     const HISTORY_DB = "retireLab_history";
     const HISTORY_STORE = "snapshots";
 
@@ -902,6 +914,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return `${y}-${m}-${day}`;
     }
 
+    // @section app-state | App 상태·기본 계좌·초기화·저장 효과
     function App() {
       const [isLoaded, setIsLoaded] = useState(false);
       const [loadError, setLoadError] = useState("");
@@ -1093,6 +1106,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         setRebalanceInfo(nextRebalance(curAcc.rebalanceMonth, curAcc.rebalanceDay));
       }, [activeAccount, curAcc.rebalanceMonth, curAcc.rebalanceDay, todayKey]);
 
+      // @section account-stats | 계좌 평가액·납입원금·손익 계산
       const calcAccStats = useCallback((acc) => {
         const allocationBaseValue = getAllocationBaseValue(acc.assets);
         const parkingValue = getParkingAssetValue(acc.assets);
@@ -1161,6 +1175,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const parkingSecuritiesValue = getParkingSecuritiesValue(curAcc.assets);
       const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
 
+      // @section report-stats | 통합 평가액·수익률·세액공제 계산
       const reportStats = useMemo(() => {
         const allKeys = ["pension1", "pension2", "irp", "dcIrp", "isa"];
         const statsMap = {};
@@ -1204,6 +1219,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         return summary;
       }, [accounts, global, currentYear, calcAccStats]);
 
+      // @section history-snapshot | 오늘 자산 이력 기록
       // ── 앱 열 때 오늘 자 자산 이력 기록 (오늘=덮어쓰기, 지난날=동결) ──
       useEffect(() => {
         if (!isLoaded || isRestoring || loadError) return;
@@ -1252,6 +1268,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }, [isLoaded, isRestoring, loadError, todayKey, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
 
 
+      // @section sorting | 주문계획 연결·종목 정렬·드래그
       const buyLogic = useMemo(() => activeAccount === "report" ? {} : calculateBuyPlan(curAcc, totalInvestableCash, parkingDeployRatio), [curAcc, totalInvestableCash, activeAccount, parkingDeployRatio]);
 
       // 종목별 합산 현황 표시용 정렬 결과
@@ -1366,6 +1383,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         return () => el.removeEventListener('touchmove', onTouchMove);
       }, [mergedSortKey]);
 
+      // @section asset-edit | 자산·납입내역 편집
       const chAsset = (id, f, v) => {
         const key = `${activeAccount}:${id}`;
         quoteVersions.current.set(key, (quoteVersions.current.get(key) || 0) + 1);
@@ -1385,6 +1403,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         updateAcc({ assets: newAssets });
       };
 
+      // @section price-fetch | 가격 조회·동시성·갱신
       const GAS_PRICE_PROXY = "https://script.google.com/macros/s/AKfycbzijpg_P0TzHc418PyTwfyny64E5cerg510hn3_WraR6kJ3gnzgh7sd8zITnZ9brN_4Jg/exec";
 
       const fetchJsonWithTimeout = async url => {
@@ -1471,6 +1490,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const fetchAllPrices = () => refreshPrices(false);
       const fetchAllAccountsPrices = () => refreshPrices(true);
 
+      // @section backup-restore | JSON 백업·복원·연도마감
       const exportData = async () => {
         const history = await getAllHistory();
         downloadJson({ schemaVersion: "1.2", exportedAt: new Date().toISOString(), accounts, global, history }, `절세3총사_백업_${localDateKey()}.json`);
@@ -1522,6 +1542,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         finally { setIsSettling(false); }
       };
 
+      // @section app-shell | 복구 화면·탭·공통 화면 구성
       if (loadError) return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
           <div className="max-w-md bg-white p-6 rounded-2xl border border-rose-200 space-y-4">
@@ -1587,6 +1608,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           {(isRestoring || isSettling) && <div className="fixed inset-0 z-[100] bg-slate-900/40 flex items-center justify-center"><p className="bg-white p-6 rounded-2xl font-bold">{isRestoring ? "복원 중…" : "연도 마감 중…"}</p></div>}
           <main className="max-w-4xl mx-auto px-4 mt-4 space-y-6">
 
+            {/* @section report-ui | 통합 리포트 화면 */}
             {/* 통합 리포트 */}
             {activeAccount === "report" && (
               <div className="space-y-4 pt-4">
@@ -1865,6 +1887,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section dashboard-ui | 계좌 대시보드·리밸런싱 요약 */}
             {/* 대시보드 */}
             {activeAccount !== "report" && activeTab === "dashboard" && (
               <div className="-mt-20 relative z-10 space-y-4">
@@ -2206,6 +2229,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section assets-ui | 자산 입력 화면 */}
             {/* 자산 탭 */}
             {activeAccount !== "report" && activeTab === "assets" && (
               <div className={`${cardBase} overflow-hidden`}>
@@ -2413,6 +2437,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section contributions-ui | 납입 입력 화면 */}
             {/* 납입 탭 */}
             {activeAccount !== "report" && activeTab === "contributions" && (
               <div className="space-y-4">
@@ -2529,6 +2554,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section settings-ui | 설정·버전·변경사항 화면 */}
             {/* 설정 탭 */}
             {activeAccount !== "report" && activeTab === "settings" && (
               <div className="space-y-4">
@@ -2710,6 +2736,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
+                      <li>기능별 코드 위치 표식과 유지보수용 코드 지도 추가</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.1 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
                       <li>수익률 설명이 잘리지 않도록 카드 안에서 펼쳐 표시</li>
                       <li>통합 리포트 상단에 앱 버전 표시</li>
                     </ul>
@@ -2725,6 +2755,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             )}
           </main>
 
+          {/* @section navigation-ui | 하단 탭 */}
           {/* 하단 탭 바 */}
           <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-t border-slate-200 shadow-[0_-10px_40px_rgba(0,0,0,0.04)] pb-[env(safe-area-inset-bottom)]">
             <div className="max-w-4xl mx-auto grid grid-cols-4 h-[68px]">
@@ -2744,6 +2775,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </div>
           </nav>
 
+          {/* @section rebalance-modal | 리밸런싱 주문 상세 */}
           {/* 리밸런싱 모달 */}
           {showRebalance && activeHasTarget && !buyLogic.invalidTarget && (
             <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
@@ -2813,6 +2845,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // @section bootstrap | React 앱 실행
     const rootElement = document.getElementById("root");
     const root = createRoot(rootElement);
     root.render(<App />);
