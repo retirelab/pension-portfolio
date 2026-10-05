@@ -460,6 +460,45 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // ── 자산 추이 SVG 라인차트 ──
+    function mergeAccountAssets(accounts, keys = ACCOUNT_KEYS) {
+      const grouped = new Map();
+      for (const accountKey of keys) {
+        const acc = accounts[accountKey];
+        if (!acc) continue;
+        for (const a of acc.assets || []) {
+          const code = String(a.code || "").trim().toUpperCase();
+          const mergeKey = code ? `code:${code}` : isCashAsset(a) ? "cash:KRW" : `manual:${accountKey}:${a.id}`;
+          if (!grouped.has(mergeKey)) grouped.set(mergeKey, { mergeKey, name: a.name || "종목명 없음", code, category: a.category || "", totalMarketValue: 0, totalBookValue: 0, totalQuantity: 0, color: null, isCash: isCashAsset(a), prices: new Set() });
+          const item = grouped.get(mergeKey);
+          item.totalMarketValue += getAssetMarketValue(a);
+          item.totalBookValue += (Number(a.quantity) || 0) * (Number(a.price) || 0);
+          item.totalQuantity += Number(a.quantity) || 0;
+          if (a.quantity > 0 && code) item.prices.add(orderPrice(a));
+          if (!item.color) item.color = (acc.targetPortfolio || []).find(t => t.name === a.category)?.color || null;
+        }
+      }
+      const total = [...grouped.values()].reduce((n, a) => n + a.totalMarketValue, 0);
+      return [...grouped.values()].sort((a, b) => b.totalMarketValue - a.totalMarketValue).map((a, i) => ({
+        mergeKey: a.mergeKey, name: a.name, code: a.code, category: a.category, isCash: a.isCash,
+        totalMarketValue: a.totalMarketValue, totalQuantity: a.totalQuantity,
+        avgPrice: a.totalQuantity > 0 ? Math.round(a.totalBookValue / a.totalQuantity) : 0,
+        returnAmt: a.totalMarketValue - a.totalBookValue,
+        returnRate: a.totalBookValue > 0 ? (a.totalMarketValue - a.totalBookValue) / a.totalBookValue * 100 : 0,
+        pct: total > 0 ? Number((a.totalMarketValue / total * 100).toFixed(1)) : 0,
+        color: a.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length], priceMismatch: a.prices.size > 1
+      }));
+    }
+    function quoteStatus(asset, now = new Date()) {
+      if (!String(asset.code || "").trim()) return { text: "수동 입력", today: false };
+      const failed = Number.isFinite(Date.parse(asset.priceFetchFailedAt));
+      if (asset.priceSource === "manual") return { text: failed ? "조회 실패 · 직접 입력값 사용" : "현재가 직접 입력", today: false };
+      const parsed = Date.parse(asset.priceUpdatedAt);
+      if (!Number.isFinite(parsed)) return { text: failed ? "조회 실패 · 기존 입력값 사용" : "조회 기록 없음 · 입력값 사용", today: false };
+      const date = new Date(parsed);
+      const today = localDateKey(date) === localDateKey(now);
+      return { text: `${failed ? "조회 실패 · 마지막 성공 " : "조회 "}${date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`, today: today && !failed };
+    }
+
     function historyPoints(history, accountKey, days, now = new Date()) {
       const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
       const byDate = new Map();
@@ -1137,62 +1176,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           return acc;
         }, { totalValue: 0, totalPrincipal: 0, totalDividend: 0, totalBookValue: 0, accountValues: [], accountDetail: {} });
         
-        // ── 개별 자산 합산 (종목명 기준 병합) ──
-        const assetMergeMap = {};
-        allKeys.forEach(accKey => {
-          const acc = accounts[accKey];
-          (acc.assets || []).forEach(a => {
-            const mergeKey = (a.name || "").trim();
-            if (!mergeKey) return;
-            const marketValue = (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
-            const bookValue   = (Number(a.quantity) || 0) * (Number(a.price) || 0);
-            const qty         = Number(a.quantity) || 0;
-            if (!assetMergeMap[mergeKey]) {
-              const tColor = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
-              assetMergeMap[mergeKey] = {
-                name: a.name,
-                code: a.code || "",
-                category: a.category || "",
-                totalMarketValue: 0,
-                totalBookValue: 0,
-                totalQuantity: 0,
-                color: tColor,
-              };
-            }
-            assetMergeMap[mergeKey].totalMarketValue += marketValue;
-            assetMergeMap[mergeKey].totalBookValue   += bookValue;
-            assetMergeMap[mergeKey].totalQuantity    += qty;
-            if (!assetMergeMap[mergeKey].color) {
-              const tColor2 = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
-              if (tColor2) assetMergeMap[mergeKey].color = tColor2;
-            }
-          });
-        });
-
-        const totalMergedValue = Object.values(assetMergeMap)
-          .reduce((s, a) => s + a.totalMarketValue, 0);
-
-        summary.mergedAssets = Object.values(assetMergeMap)
-          .sort((a, b) => b.totalMarketValue - a.totalMarketValue)
-          .map((a, idx) => ({
-            name:             a.name,
-            code:             a.code,
-            category:         a.category,
-            totalMarketValue: a.totalMarketValue,
-            totalQuantity:    a.totalQuantity,
-            avgPrice:         a.totalQuantity > 0 ? Math.round(a.totalBookValue / a.totalQuantity) : 0,
-            returnAmt:        a.totalMarketValue - a.totalBookValue,
-            returnRate:       a.totalBookValue > 0
-                                ? ((a.totalMarketValue - a.totalBookValue) / a.totalBookValue) * 100
-                                : 0,
-            pct:              totalMergedValue > 0
-                                ? Number(((a.totalMarketValue / totalMergedValue) * 100).toFixed(1))
-                                : 0,
-            color:            a.color || DEFAULT_COLORS[idx % DEFAULT_COLORS.length],
-          }));
-
-        summary.totalMergedValue = totalMergedValue;
-        // ── 병합 끝 ──
+        // 종목코드로 합산하고 코드가 없는 직접입력 자산은 별도로 유지합니다.
+        summary.mergedAssets = mergeAccountAssets(accounts, allKeys);
+        summary.totalMergedValue = summary.mergedAssets.reduce((n, a) => n + a.totalMarketValue, 0);
 
         const dcIrpTaxCreditCash = (accounts.dcIrp && accounts.dcIrp.taxCreditEligible) ? accounts.dcIrp.contributions
           .filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입")
@@ -1264,8 +1250,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           mergedCustomOrder.forEach((name, idx) => { orderMap[name] = idx; });
           // 커스텀 순서에 없는 새 항목은 맨 뒤로
           return [...list].sort((a, b) => {
-            const ai = orderMap[a.name] ?? 9999;
-            const bi = orderMap[b.name] ?? 9999;
+            const ai = orderMap[a.mergeKey] ?? 9999;
+            const bi = orderMap[b.mergeKey] ?? 9999;
             return ai - bi;
           });
         }
@@ -1287,7 +1273,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       // 직접정렬 모드 진입 — 현재 표시 순서를 초기 커스텀 순서로 설정
       const handleEnterCustomSort = () => {
-        setMergedCustomOrder(sortedMergedAssets.map(a => a.name));
+        setMergedCustomOrder(sortedMergedAssets.map(a => a.mergeKey));
         setMergedSortKey('custom');
       };
 
@@ -1370,7 +1356,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         quoteVersions.current.set(key, (quoteVersions.current.get(key) || 0) + 1);
         if (["quantity", "price", "currentPrice"].includes(f)) v = Math.max(0, Number(v) || 0);
         if (f === "quantity") v = Math.floor(v);
-        updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v, ...(f === "code" ? { priceUpdatedAt: null } : {}) } : a) });
+        updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v, ...(f === "code" ? { priceUpdatedAt: null, priceSource: null, priceFetchFailedAt: null } : f === "currentPrice" ? { priceUpdatedAt: null, priceSource: "manual", priceFetchFailedAt: null } : {}) } : a) });
       };
       const chContrib = (id, f, v) => updateAcc({ contributions: curAcc.contributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
       const chPast = (id, f, v) => updateAcc({ pastContributions: curAcc.pastContributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
@@ -1422,13 +1408,15 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const version = (quoteVersions.current.get(key) || 0) + 1;
         quoteVersions.current.set(key, version);
         const result = await fetchStock(asset.code);
-        return result ? { ...result, id: asset.id, code: asset.code, version, key, priceUpdatedAt: new Date().toISOString() } : null;
+        return { ...(result || {}), failed: !result, id: asset.id, code: asset.code, version, key, priceUpdatedAt: new Date().toISOString() };
       };
       const applyQuotes = (accKey, updates) => setAccounts(prev => {
         if (!prev[accKey]) return prev;
         return { ...prev, [accKey]: { ...prev[accKey], assets: prev[accKey].assets.map(a => {
           const quote = updates.find(u => u && u.id === a.id && String(u.code).trim().toUpperCase() === String(a.code).trim().toUpperCase() && quoteVersions.current.get(u.key) === u.version);
-          return quote ? { ...a, name: quote.name || a.name, currentPrice: quote.price, priceUpdatedAt: quote.priceUpdatedAt } : a;
+          if (!quote) return a;
+          if (quote.failed) return { ...a, priceFetchFailedAt: quote.priceUpdatedAt };
+          return { ...a, name: quote.name || a.name, currentPrice: quote.price, priceUpdatedAt: quote.priceUpdatedAt, priceSource: "quote", priceFetchFailedAt: null };
         }) } };
       });
       const onCodeBlur = async (id, code) => {
@@ -1437,8 +1425,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         setFetchingId(id);
         try {
           const result = await requestQuote(key, { id, code });
-          if (result) { applyQuotes(key, [result]); showMsg("success", "현재가 조회가 완료됐습니다."); }
-          else showMsg("error", "현재가 조회에 실패했습니다. 이전 가격을 유지합니다.");
+          if (result && !result.failed) { applyQuotes(key, [result]); showMsg("success", "현재가 조회가 완료됐습니다."); }
+          else { applyQuotes(key, [result]); showMsg("error", "현재가 조회에 실패했습니다. 이전 가격을 유지합니다."); }
         } finally { setFetchingId(null); }
       };
       const refreshPrices = async allAccounts => {
@@ -1455,7 +1443,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             const coded = assets.filter(a => a.code && String(a.code).trim().length > 0);
             const updates = await fetchWithConcurrency(coded, async a => {
               const result = await requestQuote(key, a);
-              if (!result) failed.push(a.name || a.code);
+              if (!result || result.failed) failed.push(a.name || a.code);
               return result;
             }, 6, 100);
             applyQuotes(key, updates);
@@ -1752,7 +1740,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                           const isDropTarget = mergedSortKey === 'custom' && dragOverIdx === idx && draggedIdx !== idx;
 
                           return (
-                            <div key={a.name}
+                            <div key={a.mergeKey}
                               data-merged-drag-idx={idx}
                               draggable={mergedSortKey === 'custom'}
                               onDragStart={() => handleDragStart(idx)}
@@ -1788,10 +1776,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   <p className="text-xs font-bold text-slate-800 truncate leading-tight"
                                     style={{ maxWidth: "160px" }}>
                                     {a.name}
-                                  </p>
+                                  </p><p className="text-[9px] text-slate-400">{a.code || (a.isCash ? "예수금 합산" : "직접 입력 자산")}{a.priceMismatch ? " · 계좌별 입력가격 다름" : ""}</p>
                                   <p className="text-[10px] text-slate-400 leading-tight">
-                                    {a.totalQuantity.toLocaleString("ko-KR")}주 ·
-                                    평단 ₩{a.avgPrice.toLocaleString("ko-KR")}
+                                    {a.isCash ? "계좌별 현금잔액 합계" : <>{a.totalQuantity.toLocaleString("ko-KR")}주 · 평단 ₩{a.avgPrice.toLocaleString("ko-KR")}</>}
                                   </p>
                                 </div>
                               </div>
@@ -1913,7 +1900,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 )}
               </div>
 
-              <p className="text-[11px] text-slate-400">현재가 최근 조회: {(() => { const dates = curAcc.assets.map(a => a.priceUpdatedAt).filter(Boolean).sort(); return dates.length ? new Date(dates[dates.length - 1]).toLocaleString("ko-KR") : "기록 없음"; })()} · 개별 조회 실패 종목은 이전 가격이 유지됩니다.</p>
+              <p className="text-[11px] text-slate-400">오늘 조회 성공: {curAcc.assets.filter(a => a.code && quoteStatus(a).today).length}/{curAcc.assets.filter(a => a.code).length}종목 · 종목별 조회 시각은 자산 탭에서 확인하세요. 조회 시각은 거래소 가격 기준 시각과 다를 수 있습니다.</p>
               {/* IRP/DC 안전자산 게이지 */}
                 {(activeAccount === "irp" || activeAccount === "dcIrp") && (
                   <div className={`${cardBase} p-5 border-l-4`} style={{ borderLeftColor: stats.riskRatio > 70 ? '#f43f5e' : '#10b981' }}>
@@ -2224,7 +2211,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                               {asset.parkingAsset && <span className="mr-1 text-amber-500 font-black text-[10px] bg-amber-50 px-1 py-0.5 rounded">파킹</span>}
                               {asset.name || "종목명 없음"}
                             </p>
-                            <p className="text-[11px] text-slate-400 font-bold">{fmt(asset.quantity)}주 · ₩{fmt(asset.currentPrice || asset.price)}</p>
+                            <p className="text-[11px] text-slate-400 font-bold">{isCashAsset(asset) ? "예수금" : `${fmt(asset.quantity)}주`} · ₩{fmt(asset.currentPrice || asset.price)}</p>
+                            <p className={`text-[10px] mt-1 ${quoteStatus(asset).today ? "text-emerald-600" : "text-amber-600"}`}>{quoteStatus(asset).text}</p>
                           </div>
                           <div className="text-right"><p className="text-sm font-black text-slate-800">₩{fmt(cv)}</p><ReturnBadge amount={cv - ti} rate={pr} /></div>
                           <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ml-1 ${isOpen ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
