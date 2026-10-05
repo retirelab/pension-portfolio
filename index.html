@@ -236,6 +236,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const a = raw[key];
         if (!isRecord(a) || typeof a.label !== "string" || !Array.isArray(a.assets) || !Array.isArray(a.contributions) || !Array.isArray(a.pastContributions) || !Array.isArray(a.targetPortfolio)) throw new Error(`${key}: 필수 계좌 항목이 없습니다.`);
         if (!Number.isInteger(a.rebalanceMonth) || a.rebalanceMonth < 1 || a.rebalanceMonth > 12 || !Number.isInteger(a.rebalanceDay) || a.rebalanceDay < 1 || a.rebalanceDay > 31 || !finiteNonnegative(a.monthlyInput) || !finiteNonnegative(a.limit)) throw new Error(`${key}: 계좌 설정 값이 올바르지 않습니다.`);
+        if (a.availableCash != null && !finiteNonnegative(a.availableCash)) throw new Error(`${key}: 실제 예수금이 올바르지 않습니다.`);
+        if (a.preferredBuyAssets !== undefined && !isRecord(a.preferredBuyAssets)) throw new Error(`${key}: 매수 종목 설정이 올바르지 않습니다.`);
         const ids = new Set();
         for (const asset of a.assets) {
           if (!isRecord(asset) || !["string", "number"].includes(typeof asset.id) || ids.has(asset.id) || typeof asset.name !== "string" || typeof asset.category !== "string" || typeof asset.code !== "string" || !Number.isInteger(asset.quantity) || asset.quantity < 0 || !finiteNonnegative(asset.price) || !finiteNonnegative(asset.currentPrice) || (asset.stockRatio !== undefined && (!finiteNonnegative(asset.stockRatio) || asset.stockRatio > 100))) throw new Error(`${key}: 종목 수량·가격·식별자를 확인해주세요.`);
@@ -323,6 +325,111 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       if (a.assetType === "위험자산") return 1.0;
       return 0.0;
     };
+
+    const ORDER_FEE_RATE = 0.002; // 수수료 여유금; 실제 증권사 수수료와 다를 수 있음
+    const isCashAsset = a => isParkingAsset(a) && !String(a.code || "").trim() && a.name.trim() === "예수금";
+    const getCashValue = assets => assets.filter(isCashAsset).reduce((n, a) => n + getAssetMarketValue(a), 0);
+    const getParkingSecuritiesValue = assets => assets.filter(a => isParkingAsset(a) && !isCashAsset(a)).reduce((n, a) => n + getAssetMarketValue(a), 0);
+    const orderPrice = a => Number(a.currentPrice || a.price) || 0;
+    function allocateBuyOrders(items, budget, limit = Infinity) {
+      const eligible = items.filter(x => x.deficit > 0 && x.cp > 0).sort((a, b) => b.deficit - a.deficit).slice(0, limit);
+      const deficitTotal = eligible.reduce((n, x) => n + x.deficit, 0);
+      const orders = [];
+      let cash = Math.max(0, budget);
+      eligible.forEach(item => {
+        const allowance = Math.min(budget * item.deficit / deficitTotal, cash);
+        const shares = Math.min(Math.floor(allowance / (item.cp * (1 + ORDER_FEE_RATE))), Math.floor(item.deficit / item.cp));
+        if (shares > 0) {
+          const cost = shares * item.cp, fee = cost * ORDER_FEE_RATE;
+          orders.push({ ...item, shares, cost, fee }); cash -= cost + fee;
+        }
+      });
+      // 잔여금도 부족 금액·수수료 한도 내에서만 배분합니다.
+      for (const item of eligible) {
+        const existing = orders.find(o => o.assetId === item.assetId);
+        const spent = existing ? existing.cost : 0;
+        const shares = Math.min(Math.floor((cash + 1e-8) / (item.cp * (1 + ORDER_FEE_RATE))), Math.floor((item.deficit - spent + 1e-8) / item.cp));
+        if (shares <= 0) continue;
+        const cost = shares * item.cp, fee = cost * ORDER_FEE_RATE;
+        if (existing) { existing.shares += shares; existing.cost += cost; existing.fee += fee; }
+        else orders.push({ ...item, shares, cost, fee });
+        cash -= cost + fee;
+      }
+      return { orders, remainingCash: Math.max(0, cash) };
+    }
+    function calculateBuyPlan(acc, actualCash, parkingRatio = 0) {
+      const allocationBaseValue = getAllocationBaseValue(acc.assets);
+      const planErrors = [];
+      const targetSum = acc.targetPortfolio.reduce((n, t) => n + Number(t.value || 0), 0);
+      const names = acc.targetPortfolio.map(t => t.name.trim());
+      const invalidTarget = Math.abs(targetSum - 100) > 0.000001 || new Set(names).size !== names.length || acc.targetPortfolio.some(t => !finiteNonnegative(t.value) || !t.name.trim());
+      const empty = { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: actualCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: actualCash, planErrors };
+      if (invalidTarget || !acc.targetPortfolio.some(t => t.value > 0)) return empty;
+      const targets = acc.targetPortfolio.filter(t => t.name !== "현금/단기채" || acc.assets.some(a => !isParkingAsset(a) && a.category === t.name));
+      const activeSum = targets.reduce((n, t) => n + t.value, 0);
+      if (activeSum <= 0) return { ...empty, invalidTarget: true };
+      const categories = [...targets.map(t => ({ ...t, targetWeight: t.value / activeSum * 100 }))];
+      acc.assets.filter(a => !isParkingAsset(a)).forEach(a => {
+        if (!categories.some(t => t.name === a.category)) categories.push({ name: a.category, targetWeight: 0, color: "#94a3b8" });
+      });
+      const representative = category => {
+        const candidates = acc.assets.filter(a => !isParkingAsset(a) && a.category === category);
+        const selectedId = (acc.preferredBuyAssets || {})[category];
+        return candidates.find(a => String(a.id) === String(selectedId)) || candidates[0];
+      };
+      const currentPortfolio = categories.map(t => {
+        const categoryValue = acc.assets.filter(a => !isParkingAsset(a) && a.category === t.name).reduce((n, a) => n + getAssetMarketValue(a), 0);
+        if (t.targetWeight > 0 && !representative(t.name)) planErrors.push(`${t.name}: 매수할 종목을 등록해주세요.`);
+        return { ...t, categoryValue, value: allocationBaseValue > 0 ? categoryValue / allocationBaseValue * 100 : 0 };
+      });
+      const generatedParkingSellOrders = [];
+      let requested = Math.floor(getParkingSecuritiesValue(acc.assets) * Math.max(0, Math.min(100, parkingRatio)) / 100);
+      for (const a of acc.assets.filter(a => isParkingAsset(a) && !isCashAsset(a))) {
+        const cp = orderPrice(a);
+        if (requested <= 0 || cp <= 0) continue;
+        const shares = Math.min(Math.floor(a.quantity), Math.floor(requested / cp));
+        if (shares > 0) {
+          generatedParkingSellOrders.push({ name: a.category, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: 0, targetWeight: 0, profit: shares * (cp - a.price), isParkingLiquidation: true });
+          requested -= shares * cp;
+        }
+      }
+      const parkingGross = generatedParkingSellOrders.reduce((n, o) => n + -o.shares * o.currentPrice, 0);
+      const deployParkingCash = parkingGross * (1 - ORDER_FEE_RATE);
+      const deployCash = Math.max(0, actualCash) + deployParkingCash;
+      const targetBase = allocationBaseValue + deployCash;
+      const buyItems = currentPortfolio.map(p => {
+        const a = representative(p.name);
+        return { name: p.name, assetName: a?.name || p.name, assetId: a?.id, cp: a ? orderPrice(a) : 0, deficit: targetBase * p.targetWeight / 100 - p.categoryValue };
+      });
+      const buyOnly = allocateBuyOrders(buyItems, deployCash, 3);
+      const normalSells = [];
+      currentPortfolio.forEach(p => {
+        let excess = Math.max(0, p.categoryValue - targetBase * p.targetWeight / 100);
+        for (const a of acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name)) {
+          const cp = orderPrice(a);
+          if (cp <= 0) continue;
+          const shares = Math.min(Math.floor(a.quantity), Math.floor((excess + 1e-8) / cp));
+          if (shares > 0) {
+            normalSells.push({ name: p.name, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: p.value.toFixed(1), targetWeight: p.targetWeight.toFixed(1), profit: shares * (cp - a.price), isParkingLiquidation: false });
+            excess -= shares * cp;
+          }
+        }
+      });
+      const saleOrders = [...generatedParkingSellOrders, ...normalSells];
+      const totalSellAmt = saleOrders.reduce((n, o) => n + -o.shares * o.currentPrice, 0);
+      const fee = totalSellAmt * ORDER_FEE_RATE;
+      const fullBuys = allocateBuyOrders(buyItems, Math.max(0, actualCash) + totalSellAmt - fee);
+      const fullRebalancePlan = [...saleOrders, ...fullBuys.orders.map(o => {
+        const p = currentPortfolio.find(p => p.name === o.name);
+        return { ...o, currentPrice: o.cp, currentWeight: p.value.toFixed(1), targetWeight: p.targetWeight.toFixed(1), profit: 0, isParkingLiquidation: false };
+      })];
+      let priority = 0;
+      const deviationData = currentPortfolio.map(p => {
+        const matches = acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name);
+        return { ...p, currentWeight: p.value, gap: p.value - p.targetWeight, deficitAmount: allocationBaseValue * p.targetWeight / 100 - p.categoryValue, assetName: matches.length > 1 ? `${matches[0].name} 외 ${matches.length - 1}개` : matches[0]?.name || "" };
+      }).sort((a, b) => b.deficitAmount - a.deficitAmount).map(p => ({ ...p, priority: p.deficitAmount > 0 ? ++priority : null }));
+      return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, fullRemainingCash: fullBuys.remainingCash };
+    }
 
     function Tip({ text }) {
       const [show, setShow] = useState(false);
@@ -1014,7 +1121,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }, [currentYear]);
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
-      const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (useDividend ? (stats.thisMonthDividend || 0) : 0);
+      const recordedCash = getCashValue(curAcc.assets);
+      const totalInvestableCash = curAcc.availableCash == null ? recordedCash : Math.max(0, Number(curAcc.availableCash) || 0);
+      const parkingSecuritiesValue = getParkingSecuritiesValue(curAcc.assets);
       const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
 
       const reportStats = useMemo(() => {
@@ -1158,189 +1267,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
 
 
-      const buyLogic = useMemo(() => {
-        const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
-        const invalidTarget = activeAccount !== "report" && targetSum !== 100;
-
-        if (!activeHasTarget || invalidTarget) return { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: totalInvestableCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: totalInvestableCash };
-
-        // 1. 기준 금액 분리 계산
-        const allocationBaseValue = stats.allocationBaseValue || 0;
-        const parkingValue = stats.parkingValue || 0;
-        
-        // 2. 매수 재원에 파킹 자산 포함 (사용자 설정 비율)
-        const deployParkingCash = Math.floor(parkingValue * (parkingDeployRatio / 100));
-        const deployCash = totalInvestableCash + deployParkingCash;
-        
-        // 리밸런싱 타겟: 투자자산 + 파킹매도분
-        const rebalanceTargetValue = allocationBaseValue + deployParkingCash;
-        // Buy-only 타겟: 투자자산 + 현금투입액 + 파킹매도분
-        const targetBaseAfterBuy = allocationBaseValue + deployCash;
-
-        // 4. 파킹용 현금/단기채 목표 비중 제외
-        const activeTargetPortfolio = curAcc.targetPortfolio.filter(t => {
-          // 파킹 자산만 있는 "현금/단기채" 항목만 목표비중에서 제외
-          // 다른 자산군은 파킹 여부와 무관하게 목표비중 유지
-          if (t.name === "현금/단기채") {
-            return curAcc.assets.some(a => !a.parkingAsset && a.category === t.name);
-          }
-          return true;
-        });
-
-        // 4-1. 파킹 제외 후 목표 비중 합계가 100이 안 될 수 있으므로 정규화
-        const activeTargetSum = activeTargetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0);
-        const normalizedTargetPortfolio = activeTargetPortfolio.map(t => ({
-          ...t,
-          normalizedValue: activeTargetSum > 0 ? Number(((t.value / activeTargetSum) * 100).toFixed(1)) : t.value
-        }));
-
-        // 현재 투자 포트폴리오 비중
-        const currentPortfolio = normalizedTargetPortfolio.map(t => {
-          const cv = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name).reduce((s, a) => s + getAssetMarketValue(a), 0);
-          const w = allocationBaseValue > 0 ? (cv / allocationBaseValue) * 100 : 0;
-          return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: t.normalizedValue };
-        });
-        
-        // 일반 리밸런싱 플랜
-        const normalRebalancePlan = currentPortfolio.map(p => {
-          const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === p.name);
-          const cp = pa ? (pa.currentPrice || pa.price) : 0;
-          const ap = pa ? pa.price : 0;
-          const diff = rebalanceTargetValue * (p.targetWeight / 100) - p.categoryValue;
-          const shares = cp > 0 ? Math.round(diff / cp) : 0;
-          const profit = shares < 0 ? Math.abs(shares) * (cp - ap) : 0;
-          return { name: p.name, assetName: pa ? pa.name : p.name, currentWeight: p.value, targetWeight: p.targetWeight, shares, currentPrice: cp, profit, isParkingLiquidation: false };
-        }).filter(x => x.shares !== 0).sort((a, b) => a.shares - b.shares);
-
-        // 3. 파킹 자산 매도 주문 생성
-        const generatedParkingSellOrders = [];
-        let remainToSell = deployParkingCash;
-        if (remainToSell > 0) {
-          const parkingAssets = curAcc.assets.filter(a => a.parkingAsset);
-          for (const p of parkingAssets) {
-            if (remainToSell <= 0) break;
-            const cp = p.currentPrice || p.price || 0;
-            if (cp <= 0) continue;
-            
-            const sellShares = Math.min(p.quantity, Math.ceil(remainToSell / cp));
-            if (sellShares > 0) {
-              const sellAmt = sellShares * cp;
-              generatedParkingSellOrders.push({
-                name: p.category || "파킹자산",
-                assetName: p.name,
-                shares: -sellShares,
-                currentPrice: cp,
-                currentWeight: 0,
-                targetWeight: 0,
-                profit: 0,
-                isParkingLiquidation: true
-              });
-              remainToSell -= sellAmt;
-            }
-          }
-        }
-
-        // 전체 리밸런싱 플랜 병합 (파킹 매도가 맨 위로 오도록)
-        const fullRebalancePlan = [
-          ...generatedParkingSellOrders,
-          ...normalRebalancePlan
-        ];
-        
-        const totalSellAmt = fullRebalancePlan.filter(x => x.shares < 0).reduce((s, x) => s + Math.abs(x.shares * x.currentPrice), 0);
-        const fee = totalSellAmt * 0.002;
-        
-        // Buy-only 로직 — 부족률 비례 분할매수 (상위 3개 자산 캡)
-        // 규칙: 부족 금액 상위 3개 자산에만 배분, 각 자산 배분 한도 = deployCash * (부족금액 / 상위3개 부족금액 합계)
-        const orders = [];
-
-        // 1. 부족 자산 목록 — 부족 금액 내림차순 정렬
-        const deficitItems = currentPortfolio
-          .map(item => {
-            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name);
-            const cp = pa ? (pa.currentPrice || pa.price) : 0;
-            const deficit = (targetBaseAfterBuy * (item.targetWeight / 100)) - item.categoryValue;
-            return { name: item.name, assetName: pa ? pa.name : item.name, cp, deficit };
-          })
-          .filter(x => x.deficit > 0 && x.cp > 0)
-          .sort((a, b) => b.deficit - a.deficit);
-
-        // 2. 상위 3개만 선택
-        const TOP_N = 3;
-        const topItems = deficitItems.slice(0, TOP_N);
-        const totalDeficit = topItems.reduce((s, x) => s + x.deficit, 0);
-
-        // 3. 각 자산에 비례 배분 한도 계산 후 매수
-        let cash = deployCash;
-        topItems.forEach(item => {
-          if (cash <= 0 || item.cp <= 0) return;
-          // 이 자산에 배분할 금액 (비례 + 잔여 현금 범위 내)
-          const allocRatio = totalDeficit > 0 ? item.deficit / totalDeficit : 1 / topItems.length;
-          const allocBudget = Math.min(deployCash * allocRatio, cash, item.deficit);
-          const n = Math.floor(allocBudget / item.cp);
-          if (n > 0) {
-            const cost = n * item.cp;
-            orders.push({ name: item.name, assetName: item.assetName, shares: n, cost, deficit: item.deficit });
-            cash -= cost;
-          }
-        });
-
-        // 4. 잔여 현금 — 상위 3개 중 아직 부족한 자산에 1주씩 추가 (잔돈 소진)
-        let keepBuying = true;
-        while (keepBuying && cash > 0) {
-          keepBuying = false;
-          const candidates = topItems
-            .map(item => {
-              const order = orders.find(o => o.name === item.name);
-              const orderCost = order ? order.cost : 0;
-              const remaining = item.deficit - orderCost;
-              return { ...item, remaining };
-            })
-            .filter(x => x.remaining > 0 && cash >= x.cp)
-            .sort((a, b) => b.remaining - a.remaining);
-
-          if (candidates.length > 0) {
-            const target = candidates[0];
-            const orderIndex = orders.findIndex(o => o.name === target.name);
-            if (orderIndex >= 0) {
-              orders[orderIndex] = {
-                ...orders[orderIndex],
-                shares: orders[orderIndex].shares + 1,
-                cost: orders[orderIndex].cost + target.cp,
-                deficit: Math.max(0, orders[orderIndex].deficit - target.cp)
-              };
-            } else {
-              orders.push({ name: target.name, assetName: target.assetName, shares: 1, cost: target.cp, deficit: Math.max(0, target.deficit - target.cp) });
-            }
-            cash -= target.cp;
-            keepBuying = true;
-          }
-        }
-
-        const tempDeviation = currentPortfolio.map(p => {
-          const gap = p.value - p.targetWeight;
-          const deficitAmount = (allocationBaseValue * (p.targetWeight / 100)) - p.categoryValue;
-          const matchedAssets = curAcc.assets.filter(a => !a.parkingAsset && a.category === p.name);
-          let assetName = "";
-          if (matchedAssets.length === 1) {
-            assetName = matchedAssets[0].name || "";
-          } else if (matchedAssets.length >= 2) {
-            assetName = `${matchedAssets[0].name || "종목"} 외 ${matchedAssets.length - 1}개`;
-          }
-          return { name: p.name, assetName, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
-        });
-
-        tempDeviation.sort((a, b) => b.deficitAmount - a.deficitAmount);
-
-        let priorityCounter = 1;
-        const deviationData = tempDeviation.map(d => {
-          let priority = null;
-          if (d.deficitAmount > 0) priority = priorityCounter++;
-          return { ...d, priority };
-        });
-
-        // buyLogic 반환 객체에 deployParkingCash 및 deployCash 추가 전달
-        return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: normalRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash };
-      }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio, useDividend]);
+      const buyLogic = useMemo(() => activeAccount === "report" ? {} : calculateBuyPlan(curAcc, totalInvestableCash, parkingDeployRatio), [curAcc, totalInvestableCash, activeAccount, parkingDeployRatio]);
 
       // 종목별 합산 현황 표시용 정렬 결과
       const sortedMergedAssets = useMemo(() => {
@@ -2232,29 +2159,23 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       ) : (
                         <React.Fragment>
                           <div className="mb-6 space-y-2">
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 집행 예정액 (₩)</label>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase">오늘 주문 가능한 실제 예수금 (₩)</label>
                             <div className="relative">
                               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₩</span>
-                              <input type="number" value={curAcc.monthlyInput === 0 ? "" : curAcc.monthlyInput} onChange={e => updateAcc({ monthlyInput: Number(e.target.value) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
+                              <input type="number" min="0" value={curAcc.availableCash == null ? recordedCash : curAcc.availableCash} onChange={e => updateAcc({ availableCash: Math.max(0, Number(e.target.value) || 0) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
                             </div>
-                            {stats.thisMonthDividend > 0 && (
-                              <button type="button" onClick={() => setUseDividend(v => !v)}
-                                className={`w-full flex justify-between items-center border rounded-xl px-4 py-3 text-xs font-bold transition-all active:scale-95 ${useDividend ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
-                                <span className="flex items-center gap-1.5">
-                                  <Coins size={14} /> 이달 배당금 자동 합산
-                                  <span className={`ml-1 px-1.5 py-0.5 rounded text-[9px] ${useDividend ? "bg-amber-200 text-amber-900" : "bg-slate-200 text-slate-500"}`}>
-                                    {useDividend ? "ON" : "OFF"}
-                                  </span>
-                                </span>
-                                <span className={useDividend ? "" : "line-through"}>+₩{fmt(stats.thisMonthDividend)}</span>
-                              </button>
-                            )}
-                            
+                            <p className="text-[11px] text-slate-500">입금·배당을 포함한 현재 예수금을 입력하세요. 예정 납입금과 배당 기록은 자동으로 더하지 않습니다. 주문 체결 후 잔액을 갱신해주세요.</p>
+                            <button onClick={() => updateAcc({ availableCash: null })} className="text-xs text-indigo-600 underline">등록된 예수금 사용: ₩{fmt(recordedCash)}</button>
+                            {curAcc.targetPortfolio.map(t => {
+                              const candidates = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name);
+                              return candidates.length > 1 ? <label key={t.name} className="block text-xs text-slate-600">{t.name} 매수 종목<select className={inpBase} value={(curAcc.preferredBuyAssets || {})[t.name] || candidates[0].id} onChange={e => updateAcc({ preferredBuyAssets: { ...curAcc.preferredBuyAssets, [t.name]: e.target.value } })}>{candidates.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label> : null;
+                            })}
+                            {buyLogic.planErrors.map(error => <p key={error} className="text-xs text-rose-600">{error}</p>)}
                             {/* 추가된 파킹 자산 활용 슬라이더 */}
-                            {stats.parkingValue > 0 && (
+                            {parkingSecuritiesValue > 0 && (
                               <div className="mt-2 p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
                                 <div className="flex justify-between items-center mb-3">
-                                  <span className="text-[11px] font-bold text-indigo-800 flex items-center gap-1.5"><Archive size={14}/> 매수 대기(파킹) 자금 활용</span>
+                                  <span className="text-[11px] font-bold text-indigo-800 flex items-center gap-1.5"><Archive size={14}/> 파킹 ETF 매도 후 자금 활용</span>
                                   <span className="text-xs font-black text-indigo-700 bg-white px-2 py-1 rounded-lg shadow-sm">{parkingDeployRatio}%</span>
                                 </div>
                                 <input type="range" min="0" max="100" step="10" value={parkingDeployRatio} onChange={e => setParkingDeployRatio(Number(e.target.value))} 
@@ -2262,14 +2183,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   style={{ background: `linear-gradient(to right, #6366f1 0%, #6366f1 ${parkingDeployRatio}%, #e0e7ff ${parkingDeployRatio}%, #e0e7ff 100%)` }}
                                 />
                                 <div className="flex justify-between items-center">
-                                  <p className="text-[10px] text-indigo-600 font-medium">파킹 자산 매도액 합산</p>
+                                  <p className="text-[10px] text-indigo-600 font-medium">주 단위 매도 후 수수료 차감액</p>
                                   <p className="text-xs font-bold text-indigo-700">+₩{fmt(buyLogic.deployParkingCash)}</p>
                                 </div>
                               </div>
                             )}
 
                             <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5 text-white mt-2">
-                              <span className="text-xs font-bold text-slate-300">총 매수 가능 예수금</span>
+                              <span className="text-xs font-bold text-slate-300">총 매수 재원 (수수료 여유금 포함)</span>
                               <span className="text-base font-black">₩{fmt(buyLogic.deployCash)}</span>
                             </div>
                           </div>
@@ -2289,11 +2210,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   <p className="text-[10px] font-bold text-slate-400">₩{fmt(o.cost)}</p>
                                 </div>
                               </div>
-                            )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">입금액 부족 또는 모든 비중이 초과되었습니다.</div>}
+                            )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">1주 매수 재원이 부족하거나 목표 비중을 충족했습니다.</div>}
                           </div>
                           <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
-                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">부족 상위 3개 자산에 비례 배분했습니다. 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
+                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">부족 상위 3개에 수수료 여유금 0.2%를 반영해 배분했습니다. 예상 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
                           </div>
                         </React.Fragment>
                       )}
@@ -2907,6 +2828,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         </ul>
                       </div>
                       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                        <p className="text-xs text-slate-500 mb-3">기존 예수금 ₩{fmt(totalInvestableCash)} · 매수 후 예상 잔액 ₩{fmt(Math.floor(buyLogic.fullRemainingCash))}. 매수에도 수수료 여유금 0.2%를 반영했습니다.</p>
                         <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">총 매도 예상 차익 (과세이연)</span><span className="font-black text-rose-500">₩{fmt(buyLogic.totalProfit)}</span></div>
                         <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">예상 매도 수수료 (~0.2%)</span><span className="font-black text-slate-400">-₩{fmt(Math.round(buyLogic.fee))}</span></div>
                         <div className="border-t border-slate-100 pt-3 mt-1 flex justify-between items-center">
