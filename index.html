@@ -87,8 +87,14 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.6.2";
-    const APP_UPDATED_AT = "2026-10-05";
+    const APP_VERSION = "1.6.3";
+    const APP_UPDATED_AT = "2026-10-06";
+    const formatPercent = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "—";
+      const rounded = Number(num.toFixed(2));
+      return `${rounded.toFixed(2)}%`;
+    };
     const cumulativeReturnRate = (value, principal) => {
       if (!Number.isFinite(value) || !Number.isFinite(principal) || principal <= 0) return null;
       const rate = (value - principal) / principal * 100;
@@ -427,7 +433,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           if (cp <= 0) continue;
           const shares = Math.min(Math.floor(a.quantity), Math.floor((excess + 1e-8) / cp));
           if (shares > 0) {
-            normalSells.push({ name: p.name, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: p.value.toFixed(1), targetWeight: p.targetWeight.toFixed(1), profit: shares * (cp - a.price), isParkingLiquidation: false });
+            normalSells.push({ name: p.name, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: p.value.toFixed(2), targetWeight: p.targetWeight.toFixed(2), profit: shares * (cp - a.price), isParkingLiquidation: false });
             excess -= shares * cp;
           }
         }
@@ -438,7 +444,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const fullBuys = allocateBuyOrders(buyItems, Math.max(0, actualCash) + totalSellAmt - fee);
       const fullRebalancePlan = [...saleOrders, ...fullBuys.orders.map(o => {
         const p = currentPortfolio.find(p => p.name === o.name);
-        return { ...o, currentPrice: o.cp, currentWeight: p.value.toFixed(1), targetWeight: p.targetWeight.toFixed(1), profit: 0, isParkingLiquidation: false };
+        return { ...o, currentPrice: o.cp, currentWeight: p.value.toFixed(2), targetWeight: p.targetWeight.toFixed(2), profit: 0, isParkingLiquidation: false };
       })];
       let priority = 0;
       const deviationData = currentPortfolio.map(p => {
@@ -632,14 +638,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="text-[10px] text-slate-400 font-semibold">{centerLabel}</span>
-              <span className="text-xl font-black text-slate-800">{Math.round(rawTotal)}%</span>
+              <span className="text-xl font-black text-slate-800">{formatPercent(rawTotal)}</span>
             </div>
           </div>
           <div className="mt-4 w-full flex flex-wrap justify-center gap-1.5">
             {data.map((s, i) => (
               <span key={i} className="flex items-center text-[11px] bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-full font-semibold text-slate-700">
                 <span className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: s.color }}></span>
-                {s.name} <span className="ml-1 font-bold text-slate-500">{s.value}%</span>
+                {s.name} <span className="ml-1 font-bold text-slate-500">{formatPercent(s.value)}</span>
               </span>
             ))}
           </div>
@@ -1156,7 +1162,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             if (tColor) grp[cat].color = tColor;
             return grp;
           }, {});
-          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / allocationBaseValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
+          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: (item.totalValue / allocationBaseValue) * 100, color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
         }
         
         return { 
@@ -1696,7 +1702,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 </div>
 
                 <DonutChart title="계좌별 자산 비중" subtitle="포트폴리오 내 자금 분산도" centerLabel="통합"
-                  data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
+                  data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? (v.value / reportStats.totalValue) * 100 : 0 }))} />
                   
                 {/* 개별 자산 합산 비중 섹션 */}
                 {reportStats.mergedAssets && reportStats.mergedAssets.length > 0 && (
@@ -1945,7 +1951,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <div className="mt-4">
                       <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
                         <span>올해 납입 ₩{fmt(stats.yearCash)}</span>
-                        <span>{curAcc.limit > 0 ? ((stats.yearCash / curAcc.limit) * 100).toFixed(1) : "0.0"}%</span>
+                        <span>{curAcc.limit > 0 ? ((stats.yearCash / curAcc.limit) * 100).toFixed(2) : "0.00"}%</span>
                       </div>
                       <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                         <div className="h-full transition-all" style={{ width: `${Math.min(100, curAcc.limit > 0 ? (stats.yearCash / curAcc.limit) * 100 : 0)}%`, background: curAcc.color }} />
@@ -1963,7 +1969,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
                         <ShieldCheck size={14} className="text-amber-500" /> {activeAccount === "irp" ? "개인IRP" : "DC형"} 위험자산 비중 참고
                       </span>
-                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>입력 분류 기준 {stats.riskRatio.toFixed(1)}%</span>
+                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>입력 분류 기준 {stats.riskRatio.toFixed(2)}%</span>
                     </div>
                     <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex">
                       <div style={{ width: `${Math.min(70, stats.riskRatio)}%` }} className="bg-rose-400 h-full" />
@@ -1978,7 +1984,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         <TrendingUp size={13} className="text-blue-400" /> 실질 주식 노출
                       </span>
                       <span className="text-xs font-black text-blue-500">
-                        {stats.equityExposureRatio.toFixed(1)}%
+                        {stats.equityExposureRatio.toFixed(2)}%
                       </span>
                     </div>
                   </div>
@@ -2028,7 +2034,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   <div className="flex flex-col sm:flex-row gap-2 mt-4">
                     {[{ c: '#3b82f6', l: '순수 원금', p: stats.pctP, v: stats.purePrincipal }, { c: '#f59e0b', l: '재투자 배당', p: stats.pctD, v: stats.totalDividend }, { c: '#f43f5e', l: '평가 수익', p: stats.pctG, v: stats.capitalGain }].map(x => (
                       <div key={x.l} className="flex-1 flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600"><span className="w-2 h-2 rounded-full" style={{ background: x.c }}></span><span className="font-bold">{x.l} {x.p.toFixed(1)}%</span></div>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-600"><span className="w-2 h-2 rounded-full" style={{ background: x.c }}></span><span className="font-bold">{x.l} {x.p.toFixed(2)}%</span></div>
                         <span className="text-xs font-bold text-slate-500">₩{fmt(x.v)}</span>
                       </div>
                     ))}
@@ -2088,9 +2094,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
                             let statusText = <span className="text-emerald-500 font-bold">✓ 균형</span>;
                             if (isDeficit) {
-                              statusText = <span className="text-amber-500 font-bold">▼ {item.gap.toFixed(1)}% / ₩{fmt(Math.round(item.deficitAmount))} 부족</span>;
+                              statusText = <span className="text-amber-500 font-bold">▼ {item.gap.toFixed(2)}% / ₩{fmt(Math.round(item.deficitAmount))} 부족</span>;
                             } else if (isSurplus) {
-                              statusText = <span className="text-blue-500 font-bold">▲ +{item.gap.toFixed(1)}% / ₩{fmt(Math.round(Math.abs(item.deficitAmount)))} 초과</span>;
+                              statusText = <span className="text-blue-500 font-bold">▲ +{item.gap.toFixed(2)}% / ₩{fmt(Math.round(Math.abs(item.deficitAmount)))} 초과</span>;
                             }
 
                             const maxScale = Math.max(item.targetWeight, item.currentWeight) * 1.2;
@@ -2122,7 +2128,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                     <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-400 z-10" style={{ left: `${targetPct}%`, marginLeft: '-1px' }} />
                                   </div>
                                   <div className="text-[10px] font-bold text-slate-500 w-24 text-right flex-shrink-0">
-                                    현재 <span className="text-slate-800">{item.currentWeight.toFixed(1)}%</span> / 목표 {item.targetWeight.toFixed(1)}%
+                                    현재 <span className="text-slate-800">{item.currentWeight.toFixed(2)}%</span> / 목표 {item.targetWeight.toFixed(2)}%
                                   </div>
                                 </div>
                               </div>
@@ -2664,7 +2670,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   {curAcc.targetPortfolio.length > 0 && (
                     <div className={`mt-4 p-4 rounded-xl flex justify-between items-center font-bold text-xs ${curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) === 100 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
                       <span>합계 (100% 필수)</span>
-                      <span className="text-base font-black">{curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0)}%</span>
+                      <span className="text-base font-black">{formatPercent(curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0))}</span>
                     </div>
                   )}
                 </div>
@@ -2735,6 +2741,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>도넛 차트와 비중 표시를 소수점 둘째 자리로 통일</li>
+                      <li>차트 데이터는 원래 정밀도를 유지하고 표시할 때만 반올림</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.2 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>기능별 코드 위치 표식과 유지보수용 코드 지도 추가</li>
                     </ul>
