@@ -87,8 +87,8 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.6.3";
-    const APP_UPDATED_AT = "2026-10-06";
+    const APP_VERSION = "1.7.0";
+    const APP_UPDATED_AT = "2026-11-06";
     const formatPercent = (value) => {
       const num = Number(value);
       if (!Number.isFinite(num)) return "—";
@@ -258,6 +258,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const a = raw[key];
         if (!isRecord(a) || typeof a.label !== "string" || !Array.isArray(a.assets) || !Array.isArray(a.contributions) || !Array.isArray(a.pastContributions) || !Array.isArray(a.targetPortfolio)) throw new Error(`${key}: 필수 계좌 항목이 없습니다.`);
         if (!Number.isInteger(a.rebalanceMonth) || a.rebalanceMonth < 1 || a.rebalanceMonth > 12 || !Number.isInteger(a.rebalanceDay) || a.rebalanceDay < 1 || a.rebalanceDay > 31 || !finiteNonnegative(a.monthlyInput) || !finiteNonnegative(a.limit)) throw new Error(`${key}: 계좌 설정 값이 올바르지 않습니다.`);
+        if (a.rebalanceFrequency !== undefined && !REBALANCE_RULES.some(r => r.id === a.rebalanceFrequency)) throw new Error(`${key}: 리밸런싱 주기가 올바르지 않습니다.`);
         if (a.availableCash != null && !finiteNonnegative(a.availableCash)) throw new Error(`${key}: 실제 예수금이 올바르지 않습니다.`);
         if (a.preferredBuyAssets !== undefined && !isRecord(a.preferredBuyAssets)) throw new Error(`${key}: 매수 종목 설정이 올바르지 않습니다.`);
         const ids = new Set();
@@ -339,13 +340,34 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       if (MIXED_ASSET_CATEGORIES.includes(a.category)) return Math.max(0, Math.min(100, Number(a.stockRatio ?? 30))) / 100;
       return /주식|S&P500|나스닥|CSI300|한국200/.test(a.category) ? 1 : 0;
     };
-    function nextRebalance(month, day, now = new Date()) {
+    const REBALANCE_RULES = [
+      { id: "annual", label: "연 1회", months: 12 },
+      { id: "semiannual", label: "반기", months: 6 },
+      { id: "quarterly", label: "분기", months: 3 },
+      { id: "monthly", label: "매월", months: 1 },
+    ];
+    const getRebalanceRule = (frequency) => REBALANCE_RULES.find(r => r.id === frequency) || REBALANCE_RULES[0];
+    function rebalanceScheduleLabel(acc) {
+      const rule = getRebalanceRule(acc.rebalanceFrequency);
+      if (rule.months === 1) return `매월 ${acc.rebalanceDay}일`;
+      const months = Array.from({ length: 12 }, (_, i) => i + 1)
+        .filter(m => (m - acc.rebalanceMonth + 12) % rule.months === 0);
+      return `${rule.label} · ${months.join("·")}월 ${acc.rebalanceDay}일`;
+    }
+    function nextRebalance(month, day, now = new Date(), frequency = "annual") {
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const makeDate = year => new Date(year, month - 1, Math.min(day, new Date(year, month, 0).getDate()));
-      let target = makeDate(today.getFullYear());
-      if (target < today) target = makeDate(today.getFullYear() + 1);
-      const utcDay = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-      return { date: localDateKey(target), days: Math.round((utcDay(target) - utcDay(today)) / 86400000) };
+      const interval = getRebalanceRule(frequency).months;
+      // 매 회차는 원래 기준 일로 계산해 2월 말일 보정이 다음 달로 이어지지 않게 합니다.
+      for (let offset = 0; offset <= 12; offset++) {
+        const first = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+        const candidateMonth = first.getMonth() + 1;
+        if ((candidateMonth - month + 12) % interval !== 0) continue;
+        const lastDay = new Date(first.getFullYear(), candidateMonth, 0).getDate();
+        const target = new Date(first.getFullYear(), candidateMonth - 1, Math.min(day, lastDay));
+        if (target < today) continue;
+        const utcDay = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+        return { date: localDateKey(target), days: Math.round((utcDay(target) - utcDay(today)) / 86400000) };
+      }
     }
 
     // @section order-plan | 매수·매도·수수료 계획
@@ -1109,8 +1131,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const curAcc = accounts[activeAccount] || accounts.pension1;
       useEffect(() => {
         if (activeAccount === "report") return;
-        setRebalanceInfo(nextRebalance(curAcc.rebalanceMonth, curAcc.rebalanceDay));
-      }, [activeAccount, curAcc.rebalanceMonth, curAcc.rebalanceDay, todayKey]);
+        setRebalanceInfo(nextRebalance(curAcc.rebalanceMonth, curAcc.rebalanceDay, new Date(), curAcc.rebalanceFrequency));
+      }, [activeAccount, curAcc.rebalanceMonth, curAcc.rebalanceDay, curAcc.rebalanceFrequency, todayKey]);
 
       // @section account-stats | 계좌 평가액·납입원금·손익 계산
       const calcAccStats = useCallback((acc) => {
@@ -2015,6 +2037,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       </p>
                       {dDay <= 0 && <span className="px-2 py-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full animate-pulse">실행일!</span>}
                     </div>
+                    <p className="text-[11px] text-slate-500 mt-2">{rebalanceScheduleLabel(curAcc)}</p>
                   </div>
                   <button onClick={() => setShowRebalance(true)}
                     className="px-4 py-2.5 rounded-xl text-white font-black text-xs shadow-md transition-all active:scale-95"
@@ -2676,30 +2699,38 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 </div>
 
                 {/* 리밸런싱 주기 설정 */}
-                <div className={`${cardBase} p-6 space-y-3`}>
-                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4">
-                    <Calendar size={16} /> 정기 리밸런싱 주기
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
+                <div className={`${cardBase} p-6 space-y-4`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Calendar size={16} /> 리밸런싱 주기 설정</p>
+                  <p className="text-xs text-slate-500">현재 계좌에만 적용됩니다.</p>
+                  <div>
+                    <label htmlFor="rebalance-frequency" className="block text-[10px] font-bold text-slate-400 mb-1">주기</label>
+                    <select id="rebalance-frequency" value={curAcc.rebalanceFrequency || "annual"}
+                      onChange={e => updateAcc({ rebalanceFrequency: e.target.value })} className={inpBase}>
+                      {REBALANCE_RULES.map(rule => <option key={rule.id} value={rule.id}>{rule.label}</option>)}
+                    </select>
+                  </div>
+                  <div className={`grid gap-3 ${getRebalanceRule(curAcc.rebalanceFrequency).months === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                    {getRebalanceRule(curAcc.rebalanceFrequency).months !== 1 && (
+                      <div>
+                        <label htmlFor="rebalance-month" className="block text-[10px] font-bold text-slate-400 mb-1">기준 월</label>
+                        <select id="rebalance-month" value={curAcc.rebalanceMonth} onChange={e => updateAcc({ rebalanceMonth: Number(e.target.value) })} className={inpBase}>
+                          {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 월</label>
-                      <select value={curAcc.rebalanceMonth} onChange={e => updateAcc({ rebalanceMonth: Number(e.target.value) })} className={inpBase}>
-                        {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 일</label>
-                      <input type="number" min="1" max="31" value={curAcc.rebalanceDay} 
+                      <label htmlFor="rebalance-day" className="block text-[10px] font-bold text-slate-400 mb-1">기준 일</label>
+                      <input id="rebalance-day" type="number" min="1" max="31" step="1" value={curAcc.rebalanceDay}
                         onChange={e => {
-                          const textVal = e.target.value;
-                          let val = Number(textVal);
-                          if (textVal.trim() === '' || isNaN(val) || val < 1) val = 1;
-                          const lastDay = new Date(new Date().getFullYear(), curAcc.rebalanceMonth, 0).getDate();
-                          const safeDay = Math.min(val, lastDay);
-                          updateAcc({ rebalanceDay: safeDay });
-                        }} 
-                        className={`${inpBase} text-right`} />
+                          const day = Number(e.target.value);
+                          updateAcc({ rebalanceDay: Number.isFinite(day) ? Math.max(1, Math.min(31, Math.trunc(day))) : 1 });
+                        }} className={`${inpBase} text-right`} />
                     </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-1">
+                    <p className="font-bold">{rebalanceScheduleLabel(curAcc)}</p>
+                    <p>다음 리밸런싱: {rebalanceInfo.date} · {dDay === 0 ? "D-Day" : `D-${dDay}`}</p>
+                    <p>선택한 날짜가 없는 달은 말일을 사용합니다. 주말·공휴일도 달력 날짜 기준입니다.</p>
                   </div>
                 </div>
 
@@ -2741,6 +2772,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>계좌별 연·반기·분기·월 리밸런싱 주기 설정</li>
+                      <li>주기에 맞춘 다음 날짜·D-Day 및 월말 보정</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.3 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>도넛 차트와 비중 표시를 소수점 둘째 자리로 통일</li>
                       <li>차트 데이터는 원래 정밀도를 유지하고 표시할 때만 반올림</li>
