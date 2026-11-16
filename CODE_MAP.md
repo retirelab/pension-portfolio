@@ -61,3 +61,5 @@ rg -n 'cumulativeReturnRate|reportStats' index.html
 전체 함수/효과 의존성이 필요한 경우 표식 밖의 참조를 `rg`로 검색하세요. 파일을 옮겨 실제 모듈로 분리하려면 브라우저 Babel·CDN import·React hooks·PWA 캐시와 배포 경로를 함께 검증해야 합니다.
 
 리밸런싱 주기는 계좌별 `rebalanceFrequency`(`annual`/`semiannual`/`quarterly`/`monthly`)로 저장합니다. 필드가 없는 기존 계좌·백업은 연 1회로 해석합니다. `REBALANCE_RULES`, `rebalanceScheduleLabel`, `nextRebalance`는 asset-math 영역에 있습니다. 기준 월과 간격이 일치하는 달마다 기준 일을 적용하며 없는 날짜는 해당 월 말일로 보정합니다. 주말·공휴일 조정은 하지 않습니다.
+
+적립식 매수(배당·추가 입금)는 order-plan의 `allocateGapBuyOrders`를 사용합니다. 현금을 포함한 목표 금액 대비 부족분을 비교해 공통 부족 수준까지 채우며 대상 개수 제한이 없습니다. 수수료 0.2%와 정수 주를 반영하고, 매수 불가능한 종목을 제외한 잔여금을 재배분합니다. 매도까지 포함한 정기 리밸런싱은 기존 `allocateBuyOrders`를 사용합니다. 검증: `node tests/gap-allocation.cjs`.
