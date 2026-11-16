@@ -87,8 +87,8 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.7.0";
-    const APP_UPDATED_AT = "2026-11-06";
+    const APP_VERSION = "1.8.0";
+    const APP_UPDATED_AT = "2026-11-16";
     const formatPercent = (value) => {
       const num = Number(value);
       if (!Number.isFinite(num)) return "—";
@@ -402,6 +402,45 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       }
       return { orders, remainingCash: Math.max(0, cash) };
     }
+    // 현금 투입 후 목표 금액 대비 부족분을 같은 높이로 낮추는 배분입니다.
+    // 동일 총자산을 분모로 사용하므로 부족 금액 비교는 부족 비중(%p) 비교와 같습니다.
+    function allocateGapBuyOrders(items, budget) {
+      const initialCash = Number.isFinite(budget) ? Math.max(0, budget) : 0;
+      const rows = items.filter(x => Number.isFinite(x.deficit) && x.deficit > 0 && Number.isFinite(x.cp) && x.cp > 0)
+        .map(item => ({ ...item, shares: 0, cost: 0, fee: 0 })).sort((a, b) => b.deficit - a.deficit);
+      let cash = initialCash;
+      const remaining = row => row.deficit - row.cost;
+      const canBuy = row => row.cp * (1 + ORDER_FEE_RATE) <= cash + 1e-8 && row.cp <= remaining(row) + 1e-8;
+      const buy = (row, count) => {
+        row.shares += count;
+        row.cost = row.shares * row.cp;
+        row.fee = row.cost * ORDER_FEE_RATE;
+        // 주문별 합계로 다시 계산해 반복 차감에 의한 누적 오차를 피합니다.
+        cash = Math.max(0, initialCash - rows.reduce((n, r) => n + r.cost + r.fee, 0));
+      };
+      while (true) {
+        const eligible = rows.filter(canBuy).sort((a, b) => remaining(b) - remaining(a));
+        if (!eligible.length) break;
+        // 공통 잔여 부족분(level)을 구하고 그 위의 부족분부터 함께 채웁니다.
+        let low = 0, high = remaining(eligible[0]);
+        const purchaseBudget = cash / (1 + ORDER_FEE_RATE);
+        for (let i = 0; i < 64; i++) {
+          const level = (low + high) / 2;
+          const needed = eligible.reduce((n, row) => n + Math.max(0, remaining(row) - level), 0);
+          if (needed > purchaseBudget) low = level; else high = level;
+        }
+        const quotas = eligible.map(row => ({ row, amount: Math.max(0, remaining(row) - high) }));
+        let purchased = false;
+        for (const { row, amount } of quotas) {
+          const count = Math.min(Math.floor((amount + 1e-8) / row.cp), Math.floor((remaining(row) + 1e-8) / row.cp), Math.floor((cash + 1e-8) / (row.cp * (1 + ORDER_FEE_RATE))));
+          if (count > 0) { buy(row, count); purchased = true; }
+        }
+        // 정수 주 반올림으로 남은 돈은 매수 가능한 것 중 가장 부족한 곳부터 재비교합니다.
+        if (!purchased) buy(eligible[0], 1);
+      }
+      return { orders: rows.filter(row => row.shares > 0), remainingCash: cash };
+    }
+
     function calculateBuyPlan(acc, actualCash, parkingRatio = 0) {
       const allocationBaseValue = getAllocationBaseValue(acc.assets);
       const planErrors = [];
@@ -446,7 +485,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const a = representative(p.name);
         return { name: p.name, assetName: a?.name || p.name, assetId: a?.id, cp: a ? orderPrice(a) : 0, deficit: targetBase * p.targetWeight / 100 - p.categoryValue };
       });
-      const buyOnly = allocateBuyOrders(buyItems, deployCash, 3);
+      const buyOnly = allocateGapBuyOrders(buyItems, deployCash);
       const normalSells = [];
       currentPortfolio.forEach(p => {
         let excess = Math.max(0, p.categoryValue - targetBase * p.targetWeight / 100);
@@ -2164,7 +2203,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <div className={`${cardBase} p-6`}>
                       <div className="flex items-center justify-between mb-4">
                         <p className="text-sm font-bold text-slate-700 flex items-center gap-2"><Calculator size={16} style={{ color: curAcc.color }} /> 적립식 매수 도우미</p>
-                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded-lg">부족 상위 3개 비례분할</span>
+                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded-lg">괴리 우선 · 개수 제한 없음</span>
                       </div>
                       
                       {buyLogic.invalidTarget ? (
@@ -2231,7 +2270,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                           </div>
                           <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
-                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">부족 상위 3개에 수수료 여유금 0.2%를 반영해 배분했습니다. 예상 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
+                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">투입 현금을 반영한 목표 금액을 기준으로, 가장 부족한 자산군부터 채우고 부족 수준이 같아지면 함께 배분합니다. 수수료 여유금 0.2%와 1주 단위를 반영했습니다. 예상 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
                           </div>
                         </React.Fragment>
                       )}
@@ -2772,6 +2811,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>적립식 매수 도우미를 괴리 비교 배분으로 변경</li>
+                      <li>매수 대상 상위 3개 제한 해제</li>
+                      <li>1주 단위·수수료·잔여 현금 재배분 반영</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.7.0 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>계좌별 연·반기·분기·월 리밸런싱 주기 설정</li>
                       <li>주기에 맞춘 다음 날짜·D-Day 및 월말 보정</li>
