@@ -87,8 +87,8 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.8.0";
-    const APP_UPDATED_AT = "2026-11-16";
+    const APP_VERSION = "1.9.0";
+    const APP_UPDATED_AT = "2026-11-17";
     const formatPercent = (value) => {
       const num = Number(value);
       if (!Number.isFinite(num)) return "—";
@@ -513,6 +513,68 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         return { ...p, currentWeight: p.value, gap: p.value - p.targetWeight, deficitAmount: allocationBaseValue * p.targetWeight / 100 - p.categoryValue, assetName: matches.length > 1 ? `${matches[0].name} 외 ${matches.length - 1}개` : matches[0]?.name || "" };
       }).sort((a, b) => b.deficitAmount - a.deficitAmount).map(p => ({ ...p, priority: p.deficitAmount > 0 ? ++priority : null }));
       return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, fullRemainingCash: fullBuys.remainingCash };
+    }
+
+    // @section buy-preview | 권장 매수 후 비중 시뮬레이션
+    function calculateBuyPreview(plan) {
+      const portfolio = plan.currentPortfolio || [];
+      const orders = plan.buyOrders || [];
+      const beforeTotal = portfolio.reduce((sum, row) => sum + row.categoryValue, 0);
+      const purchaseCost = orders.reduce((sum, order) => sum + order.cost, 0);
+      const purchaseFee = orders.reduce((sum, order) => sum + order.fee, 0);
+      const afterTotal = beforeTotal + purchaseCost;
+      const weight = (value, total) => total > 0 ? value / total * 100 : null;
+      const rows = portfolio.map(row => {
+        const addedValue = orders.filter(order => order.name === row.name).reduce((sum, order) => sum + order.cost, 0);
+        const afterValue = row.categoryValue + addedValue;
+        const beforeWeight = weight(row.categoryValue, beforeTotal);
+        const afterWeight = weight(afterValue, afterTotal);
+        return { name: row.name, color: row.color, targetWeight: row.targetWeight, beforeValue: row.categoryValue,
+          afterValue, addedValue, beforeWeight, afterWeight,
+          afterGap: afterWeight === null ? null : afterWeight - row.targetWeight };
+      });
+      return { rows, beforeTotal, afterTotal, purchaseCost, purchaseFee, remainingCash: plan.remainingCash || 0 };
+    }
+
+    function BuyPreview({ plan }) {
+      const preview = calculateBuyPreview(plan);
+      const percent = value => value === null ? "—" : formatPercent(value);
+      const gap = value => value === null ? "—" : `${Number(value.toFixed(2)) > 0 ? "+" : ""}${Number(value.toFixed(2)).toFixed(2)}%p`;
+      return (
+        <details open className="mb-4 rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4">
+          <summary className="cursor-pointer text-sm font-bold text-slate-800">권장 매수 후 비중 미리보기</summary>
+          <div className="mt-4 space-y-4">
+            <p className="text-[11px] leading-relaxed text-slate-500">현재가로 권장 수량을 모두 매수한 예상 결과입니다. 비중은 파킹·예수금을 제외한 투자자산 기준이며, 남은 현금은 아래에 따로 표시합니다.</p>
+            <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-500">
+              <div className="rounded-xl bg-white p-2"><p>예상 매수금액</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseCost))}</p></div>
+              <div className="rounded-xl bg-white p-2"><p>매수 수수료 여유금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseFee))}</p></div>
+              <div className="rounded-xl bg-white p-2"><p>예상 잔여 현금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.remainingCash))}</p></div>
+            </div>
+            {!plan.buyOrders.length && <p className="text-xs text-slate-500">권장 매수가 없어 현재 비중을 그대로 표시합니다.</p>}
+            <p className="text-[10px] text-slate-400">막대: 회색은 현재 · 색상은 매수 후 · 점선은 목표</p>
+            {preview.rows.map(row => (
+              <div key={row.name} className="rounded-xl border border-slate-100 bg-white p-3">
+                <div className="flex flex-wrap justify-between items-center gap-1 mb-3">
+                  <span className="text-xs font-bold text-slate-700">{row.name}</span>
+                  <span className="text-[10px] text-slate-500">{row.addedValue > 0 ? `+₩${fmt(Math.round(row.addedValue))} 매수` : "추가 매수 없음"}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-400 mb-3">
+                  <div>현재<p className="mt-1 text-xs font-bold text-slate-600">{percent(row.beforeWeight)}</p></div>
+                  <div>매수 후<p className="mt-1 text-xs font-black text-indigo-600">{percent(row.afterWeight)}</p></div>
+                  <div>목표<p className="mt-1 text-xs font-bold text-slate-700">{percent(row.targetWeight)}</p></div>
+                </div>
+                <div className="relative space-y-1" aria-hidden="true">
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-slate-300 rounded-full" style={{ width: `${row.beforeWeight || 0}%` }} /></div>
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${row.afterWeight || 0}%`, background: row.color || "#6366f1" }} /></div>
+                  <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-500" style={{ left: `${row.targetWeight}%`, marginTop: 0 }} />
+                </div>
+                <p className="mt-2 text-right text-[10px] text-slate-500">매수 후 목표 대비 {gap(row.afterGap)}</p>
+              </div>
+            ))}
+            <p className="text-[10px] leading-relaxed text-slate-400">수수료는 비중 계산에 더하지 않습니다. 파킹 매도를 활용하면 해당 매도 수수료는 매수 재원에서 이미 차감됩니다. 실제 체결 가격에 따라 결과가 달라질 수 있으며, 미리보기는 보유수량을 변경하지 않습니다.</p>
+          </div>
+        </details>
+      );
     }
 
     // @section tip | 공통 도움말
@@ -2268,6 +2330,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                               </div>
                             )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">1주 매수 재원이 부족하거나 목표 비중을 충족했습니다.</div>}
                           </div>
+                          <BuyPreview plan={buyLogic} />
                           <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
                             <p className="text-[11px] text-slate-500 font-bold leading-relaxed">투입 현금을 반영한 목표 금액을 기준으로, 가장 부족한 자산군부터 채우고 부족 수준이 같아지면 함께 배분합니다. 수수료 여유금 0.2%와 1주 단위를 반영했습니다. 예상 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
@@ -2811,6 +2874,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>권장 매수 후 자산군별 예상 비중 미리보기</li>
+                      <li>현재·매수 후·목표 비교와 예상 매수금액·수수료·잔여 현금 표시</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.8.0 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>적립식 매수 도우미를 괴리 비교 배분으로 변경</li>
                       <li>매수 대상 상위 3개 제한 해제</li>
