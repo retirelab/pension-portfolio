@@ -20,6 +20,7 @@ rg -n 'cumulativeReturnRate|reportStats' index.html
 | `state-validation` | 저장 데이터 검증·원금 마감 |
 | `asset-math` | 자산 평가·위험자산·리밸런싱 날짜 |
 | `order-plan` | 매수·매도·수수료 계획 |
+| `buy-preview` | 권장 매수 후 비중 시뮬레이션·화면 |
 | `tip` | 공통 도움말 |
 | `aggregation` | 종목코드별 계좌 합산 |
 | `quote-status` | 가격 갱신 상태 |
@@ -63,3 +64,5 @@ rg -n 'cumulativeReturnRate|reportStats' index.html
 리밸런싱 주기는 계좌별 `rebalanceFrequency`(`annual`/`semiannual`/`quarterly`/`monthly`)로 저장합니다. 필드가 없는 기존 계좌·백업은 연 1회로 해석합니다. `REBALANCE_RULES`, `rebalanceScheduleLabel`, `nextRebalance`는 asset-math 영역에 있습니다. 기준 월과 간격이 일치하는 달마다 기준 일을 적용하며 없는 날짜는 해당 월 말일로 보정합니다. 주말·공휴일 조정은 하지 않습니다.
 
 적립식 매수(배당·추가 입금)는 order-plan의 `allocateGapBuyOrders`를 사용합니다. 현금을 포함한 목표 금액 대비 부족분을 비교해 공통 부족 수준까지 채우며 대상 개수 제한이 없습니다. 수수료 0.2%와 정수 주를 반영하고, 매수 불가능한 종목을 제외한 잔여금을 재배분합니다. 매도까지 포함한 정기 리밸런싱은 기존 `allocateBuyOrders`를 사용합니다. 검증: `node tests/gap-allocation.cjs`.
+
+권장 매수 미리보기는 buy-preview의 `calculateBuyPreview`(순수 함수), `BuyPreview`(화면)에서 계산·표시합니다. dashboard-ui의 매수 도우미에서 사용합니다. 현재 비중은 파킹 제외 평가액 합계, 매수 후 비중은 여기에 권장 매수 원금만 더한 금액이 분모입니다. 매수 수수료와 잔여 현금은 별도 표시하며 자산에 중복 가산하지 않습니다. 파킹 매도 수수료는 order-plan의 deployCash에 이미 반영되어 있습니다. 검증: `node tests/buy-preview.cjs`.
