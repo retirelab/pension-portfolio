@@ -87,7 +87,7 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.9.0";
+    const APP_VERSION = "1.9.1";
     const APP_UPDATED_AT = "2026-11-17";
     const formatPercent = (value) => {
       const num = Number(value);
@@ -540,38 +540,71 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const preview = calculateBuyPreview(plan);
       const percent = value => value === null ? "—" : formatPercent(value);
       const gap = value => value === null ? "—" : `${Number(value.toFixed(2)) > 0 ? "+" : ""}${Number(value.toFixed(2)).toFixed(2)}%p`;
+      const rows = [...preview.rows].sort((a, b) => ((a.beforeWeight || 0) - a.targetWeight) - ((b.beforeWeight || 0) - b.targetWeight));
       return (
-        <details open className="mb-4 rounded-2xl border border-indigo-100 bg-indigo-50/30 p-4">
+        <details open className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
           <summary className="cursor-pointer text-sm font-bold text-slate-800">권장 매수 후 비중 미리보기</summary>
-          <div className="mt-4 space-y-4">
-            <p className="text-[11px] leading-relaxed text-slate-500">현재가로 권장 수량을 모두 매수한 예상 결과입니다. 비중은 파킹·예수금을 제외한 투자자산 기준이며, 남은 현금은 아래에 따로 표시합니다.</p>
-            <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-500">
-              <div className="rounded-xl bg-white p-2"><p>예상 매수금액</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseCost))}</p></div>
-              <div className="rounded-xl bg-white p-2"><p>매수 수수료 여유금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseFee))}</p></div>
-              <div className="rounded-xl bg-white p-2"><p>예상 잔여 현금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.remainingCash))}</p></div>
+          <div className="mt-5 space-y-5">
+            <p className="text-[11px] leading-relaxed text-slate-500">권장 수량을 현재가로 모두 매수한 예상 결과입니다. 비중은 파킹·예수금을 제외한 투자자산 기준입니다.</p>
+            <div className="grid grid-cols-3 gap-2 border-y border-slate-100 py-3 text-center text-[10px] text-slate-500">
+              <div><p>예상 매수금액</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseCost))}</p></div>
+              <div><p>매수 수수료 여유금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseFee))}</p></div>
+              <div><p>예상 잔여 현금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.remainingCash))}</p></div>
             </div>
             {!plan.buyOrders.length && <p className="text-xs text-slate-500">권장 매수가 없어 현재 비중을 그대로 표시합니다.</p>}
-            <p className="text-[10px] text-slate-400">막대: 회색은 현재 · 색상은 매수 후 · 점선은 목표</p>
-            {preview.rows.map(row => (
-              <div key={row.name} className="rounded-xl border border-slate-100 bg-white p-3">
-                <div className="flex flex-wrap justify-between items-center gap-1 mb-3">
-                  <span className="text-xs font-bold text-slate-700">{row.name}</span>
-                  <span className="text-[10px] text-slate-500">{row.addedValue > 0 ? `+₩${fmt(Math.round(row.addedValue))} 매수` : "추가 매수 없음"}</span>
-                </div>
-                <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-400 mb-3">
-                  <div>현재<p className="mt-1 text-xs font-bold text-slate-600">{percent(row.beforeWeight)}</p></div>
-                  <div>매수 후<p className="mt-1 text-xs font-black text-indigo-600">{percent(row.afterWeight)}</p></div>
-                  <div>목표<p className="mt-1 text-xs font-bold text-slate-700">{percent(row.targetWeight)}</p></div>
-                </div>
-                <div className="relative space-y-1" aria-hidden="true">
-                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-slate-300 rounded-full" style={{ width: `${row.beforeWeight || 0}%` }} /></div>
-                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${row.afterWeight || 0}%`, background: row.color || "#6366f1" }} /></div>
-                  <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-500" style={{ left: `${row.targetWeight}%`, marginTop: 0 }} />
-                </div>
-                <p className="mt-2 text-right text-[10px] text-slate-500">매수 후 목표 대비 {gap(row.afterGap)}</p>
-              </div>
-            ))}
-            <p className="text-[10px] leading-relaxed text-slate-400">수수료는 비중 계산에 더하지 않습니다. 파킹 매도를 활용하면 해당 매도 수수료는 매수 재원에서 이미 차감됩니다. 실제 체결 가격에 따라 결과가 달라질 수 있으며, 미리보기는 보유수량을 변경하지 않습니다.</p>
+            <p className="text-[10px] text-slate-400">막대: 매수 후 · 가는 실선: 현재 · 점선: 목표 / 우측 괴리는 매수 후 기준</p>
+            <div className="space-y-6">
+              {rows.map((row, index) => {
+                const beforeGap = row.beforeWeight === null ? null : row.beforeWeight - row.targetWeight;
+                const previous = (plan.deviationData || []).find(item => item.name === row.name);
+                const priority = previous?.priority || index + 1;
+                const isDeficit = row.afterGap !== null && row.afterGap < -0.5;
+                const isSurplus = row.afterGap !== null && row.afterGap > 0.5;
+                const shortage = Math.abs(preview.afterTotal * row.targetWeight / 100 - row.afterValue);
+                const maxScale = Math.max(row.targetWeight, row.beforeWeight || 0, row.afterWeight || 0) * 1.2;
+                const scale = weight => maxScale > 0 ? (weight || 0) / maxScale * 100 : 0;
+                const badgeColor = priority === 1 ? "bg-rose-100 text-rose-600" : priority === 2 ? "bg-amber-100 text-amber-600" : "bg-slate-200 text-slate-600";
+                return (
+                  <div key={row.name}>
+                    <div className="flex flex-wrap sm:flex-nowrap justify-between items-end gap-2 mb-1.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {beforeGap !== null && beforeGap < -0.5 ? (
+                          <span className={`${badgeColor} px-1.5 py-0.5 rounded text-[10px] font-black flex-shrink-0`}>{priority}순위</span>
+                        ) : beforeGap !== null && beforeGap > 0.5 ? (
+                          <span className="text-blue-500 font-black text-[10px] flex-shrink-0">초과</span>
+                        ) : <span className="text-emerald-500 font-black text-[10px] flex-shrink-0">{beforeGap === null ? "—" : "✓"}</span>}
+                        <div className="min-w-0">
+                          <span className="text-sm font-bold text-slate-800">{row.name}</span>
+                          {previous?.assetName && <span className="hidden sm:inline text-xs font-medium text-slate-400"> · {previous.assetName}</span>}
+                          {previous?.assetName && <p className="sm:hidden text-[10px] font-medium text-slate-400 truncate leading-tight">{previous.assetName}</p>}
+                        </div>
+                      </div>
+                      <div className="text-[11px] ml-auto flex-shrink-0">
+                        {row.afterGap === null ? <span className="text-slate-400">비중 산정 불가</span> : isDeficit ? (
+                          <span className="text-amber-500 font-bold">▼ {gap(row.afterGap)} / ₩{fmt(Math.round(shortage))} 부족</span>
+                        ) : isSurplus ? (
+                          <span className="text-blue-500 font-bold">▲ {gap(row.afterGap)} / ₩{fmt(Math.round(shortage))} 초과</span>
+                        ) : <span className="text-emerald-500 font-bold">✓ 균형 · {gap(row.afterGap)}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex-1 min-w-0 h-3 bg-slate-100 rounded-full overflow-hidden" aria-hidden="true">
+                        <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-500" style={{ width: `${scale(row.afterWeight)}%`, backgroundColor: row.color || "#6366f1" }} />
+                        {row.beforeWeight !== null && <div className="absolute top-0 bottom-0 border-l border-slate-500 z-10" style={{ left: `${scale(row.beforeWeight)}%` }} />}
+                        <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-400 z-20" style={{ left: `${scale(row.targetWeight)}%`, marginLeft: '-1px' }} />
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-500 w-28 sm:w-48 text-right flex-shrink-0">
+                        <span className="block sm:inline">현재 <span className="text-slate-800">{percent(row.beforeWeight)}</span><span className="hidden sm:inline"> → </span></span>
+                        <span className="block sm:inline">매수 후 <span className="text-slate-800">{percent(row.afterWeight)}</span></span>
+                        <span className="block">목표 {percent(row.targetWeight)}</span>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-400">{row.addedValue > 0 ? `+₩${fmt(Math.round(row.addedValue))} 매수` : "추가 매수 없음"}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] leading-relaxed text-slate-400">순위는 현재 괴리율 기준입니다. 수수료와 잔여 현금은 투자 비중에 포함하지 않습니다. 실제 체결 가격에 따라 결과가 달라질 수 있으며, 미리보기는 보유수량을 변경하지 않습니다.</p>
           </div>
         </details>
       );
@@ -2874,6 +2907,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>매수 미리보기를 자산군별 괴리율과 같은 막대·순위·색상으로 통일</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.9.0 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>권장 매수 후 자산군별 예상 비중 미리보기</li>
                       <li>현재·매수 후·목표 비교와 예상 매수금액·수수료·잔여 현금 표시</li>
