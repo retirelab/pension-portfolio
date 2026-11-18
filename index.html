@@ -87,8 +87,8 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.9.1";
-    const APP_UPDATED_AT = "2026-11-17";
+    const APP_VERSION = "1.9.2";
+    const APP_UPDATED_AT = "2026-11-18";
     const formatPercent = (value) => {
       const num = Number(value);
       if (!Number.isFinite(num)) return "—";
@@ -1097,7 +1097,6 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const [historyWriteError, setHistoryWriteError] = useState("");
       const [historyReloadTick, setHistoryReloadTick] = useState(0);
       const [historyAccount, setHistoryAccount] = useState("total");
-      const [useDividend, setUseDividend] = useState(true);
 
       // 종목별 합산 현황 정렬 상태
       const [mergedSortKey, setMergedSortKey] = useState('value');
@@ -1279,9 +1278,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const prevDividend = acc.pastContributions.reduce((s, p) => s + (Number(p.dividend) || 0), 0);
         const activeCash = acc.contributions.filter(c => c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const activeDividend = acc.contributions.filter(c => c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-        const currentMonthStr = `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-        const thisMonthDividend = acc.contributions.filter(c => String(c.month || "").slice(0, 7) === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-        
+
         const employerCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "회사부담금").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const personalCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입").reduce((s, c) => s + (Number(c.amount) || 0), 0);
 
@@ -1326,7 +1323,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           unknownRiskCount: acc.assets.filter(a => a.quantity > 0 && !["위험자산", "안전자산"].includes(a.assetType)).length, 
           purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, 
           principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, 
-          riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, 
+          riskRatio, equityExposureRatio, currentHoldingsChartData,
           employerCash, personalCash 
         };
       }, [currentYear, todayKey]);
@@ -2907,6 +2904,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>이번 달 배당금 자동합산 계산 제거 (v1.8.0에서 매수 도우미가 실제 예수금 기준으로 바뀌어 사용되지 않던 계산)</li>
+                      <li>절세계좌는 인출이 제한되어 배당금이 예수금으로 남으므로 별도 합산 없이 매수에 반영됩니다</li>
+                      <li>배당 납입내역 입력·누적 배당금·수익률 계산은 변경 없음</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.9.1 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>매수 미리보기를 자산군별 괴리율과 같은 막대·순위·색상으로 통일</li>
                     </ul>
