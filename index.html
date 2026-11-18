@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
   <link rel="manifest" href="/pension-portfolio/manifest.json">
   <meta name="theme-color" content="#0f172a">
   <meta name="mobile-web-app-capable" content="yes">
@@ -86,6 +86,26 @@
       GripVertical
     } from "https://esm.sh/lucide-react@0.292.0";
 
+    // @section release | 버전·수익률·공통 도구
+    const APP_VERSION = "1.9.2";
+    const APP_UPDATED_AT = "2026-11-18";
+    const formatPercent = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return "—";
+      const rounded = Number(num.toFixed(2));
+      return `${rounded.toFixed(2)}%`;
+    };
+    const cumulativeReturnRate = (value, principal) => {
+      if (!Number.isFinite(value) || !Number.isFinite(principal) || principal <= 0) return null;
+      const rate = (value - principal) / principal * 100;
+      return Number.isFinite(rate) ? rate : null;
+    };
+    const formatReturnRate = (rate) => {
+      if (rate === null) return "—";
+      const rounded = Number(rate.toFixed(2));
+      return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}%`;
+    };
+
     const fmt = (n) => {
   const num = Number(n);
   return Number.isFinite(num) ? num.toLocaleString("ko-KR") : "0";
@@ -115,6 +135,7 @@ const formatFailedNames = (names, max = 3) => {
 const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899'];
 
     // 혼합 자산군 관리용 상수
+    // @section presets | 자산 분류·기본 계좌
     const MIXED_ASSET_CATEGORIES = ["주식+채권"];
 
     // 공통 자산군 프리셋 목록
@@ -220,29 +241,376 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return next;
     };
 
+    // @section state-validation | 저장 데이터 검증·원금 마감
+    const ACCOUNT_KEYS = ["pension1", "pension2", "irp", "dcIrp", "isa"];
+    const STORAGE_KEY = "retireLab_state_v4";
+    const isRecord = v => v !== null && typeof v === "object" && !Array.isArray(v);
+    const finiteNonnegative = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
+    const validDate = (value, allowMonth = false) => {
+      if (typeof value !== "string" || !(allowMonth ? /^\d{4}-\d{2}(?:-\d{2})?$/ : /^\d{4}-\d{2}-\d{2}$/).test(value)) return false;
+      const [y, m, day = 1] = value.split("-").map(Number);
+      const d = new Date(y, m - 1, day);
+      return y >= 1900 && d.getFullYear() === y && d.getMonth() === m - 1 && d.getDate() === day;
+    };
+    function validateState(raw, settings) {
+      if (!isRecord(raw) || !isRecord(settings) || typeof settings.userName !== "string" || !["5500이하", "5500초과"].includes(settings.incomeLevel)) throw new Error("계좌 또는 사용자 설정을 확인해주세요.");
+      for (const key of ACCOUNT_KEYS.filter(k => k !== "dcIrp" || raw[k] !== undefined)) {
+        const a = raw[key];
+        if (!isRecord(a) || typeof a.label !== "string" || !Array.isArray(a.assets) || !Array.isArray(a.contributions) || !Array.isArray(a.pastContributions) || !Array.isArray(a.targetPortfolio)) throw new Error(`${key}: 필수 계좌 항목이 없습니다.`);
+        if (!Number.isInteger(a.rebalanceMonth) || a.rebalanceMonth < 1 || a.rebalanceMonth > 12 || !Number.isInteger(a.rebalanceDay) || a.rebalanceDay < 1 || a.rebalanceDay > 31 || !finiteNonnegative(a.monthlyInput) || !finiteNonnegative(a.limit)) throw new Error(`${key}: 계좌 설정 값이 올바르지 않습니다.`);
+        if (a.rebalanceFrequency !== undefined && !REBALANCE_RULES.some(r => r.id === a.rebalanceFrequency)) throw new Error(`${key}: 리밸런싱 주기가 올바르지 않습니다.`);
+        if (a.availableCash != null && !finiteNonnegative(a.availableCash)) throw new Error(`${key}: 실제 예수금이 올바르지 않습니다.`);
+        if (a.preferredBuyAssets !== undefined && !isRecord(a.preferredBuyAssets)) throw new Error(`${key}: 매수 종목 설정이 올바르지 않습니다.`);
+        const ids = new Set();
+        for (const asset of a.assets) {
+          if (!isRecord(asset) || !["string", "number"].includes(typeof asset.id) || ids.has(asset.id) || typeof asset.name !== "string" || typeof asset.category !== "string" || typeof asset.code !== "string" || !Number.isInteger(asset.quantity) || asset.quantity < 0 || !finiteNonnegative(asset.price) || !finiteNonnegative(asset.currentPrice) || (asset.stockRatio !== undefined && (!finiteNonnegative(asset.stockRatio) || asset.stockRatio > 100))) throw new Error(`${key}: 종목 수량·가격·식별자를 확인해주세요.`);
+          ids.add(asset.id);
+        }
+        for (const c of a.contributions) if (!isRecord(c) || !validDate(c.month, true) || !finiteNonnegative(c.amount) || !["입금", "개인추가납입", "회사부담금", "배당"].includes(c.type)) throw new Error(`${key}: 납입 날짜 또는 금액을 확인해주세요.`);
+        const years = new Set();
+        for (const c of a.pastContributions) {
+          if (!isRecord(c) || !Number.isInteger(c.year) || c.year < 1900 || years.has(c.year) || !finiteNonnegative(c.amount) || !finiteNonnegative(c.dividend)) throw new Error(`${key}: 과거 합계가 올바르지 않습니다.`);
+          years.add(c.year);
+        }
+        for (const t of a.targetPortfolio) if (!isRecord(t) || typeof t.name !== "string" || !finiteNonnegative(t.value) || t.value > 100) throw new Error(`${key}: 목표 비중을 확인해주세요.`);
+      }
+      const accounts = normalizeAccounts(raw);
+      if (raw.dcIrp === undefined) accounts.dcIrp = { ...createDefaultDcIrp(), assets: [], contributions: [], pastContributions: [], monthlyInput: 0 };
+      return { accounts, global: { ...settings } };
+    }
+    function validateBackup(d) {
+      if (!isRecord(d) || !["1.0", "1.1", "1.2"].includes(String(d.schemaVersion))) throw new Error("지원하지 않는 백업 버전입니다.");
+      const state = validateState(d.accounts, d.global);
+      const history = d.history === undefined ? [] : d.history;
+      if (!Array.isArray(history)) throw new Error("자산 이력이 올바르지 않습니다.");
+      const dates = new Set();
+      for (const row of history) {
+        if (!isRecord(row) || !validDate(row.date) || dates.has(row.date) || !isRecord(row.accounts)) throw new Error("자산 이력 날짜 또는 계좌가 올바르지 않습니다.");
+        dates.add(row.date);
+        for (const field of ["totalValue", "totalPrincipal", "totalDividend"]) if (!finiteNonnegative(row[field])) throw new Error("자산 이력 합계가 올바르지 않습니다.");
+        for (const a of Object.values(row.accounts)) if (!isRecord(a) || !finiteNonnegative(a.value) || !finiteNonnegative(a.principal) || !finiteNonnegative(a.dividend)) throw new Error("계좌별 이력이 올바르지 않습니다.");
+      }
+      return { ...state, history };
+    }
+    function saveState(accounts, global) {
+      // 하나의 키에 기록하므로 계좌와 설정이 따로 저장되는 문제를 방지합니다.
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ accounts, global }));
+    }
+    function downloadJson(payload, filename) {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      const a = document.createElement("a"); a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+    function contributionTotals(acc) {
+      return {
+        principal: acc.pastContributions.reduce((n, x) => n + x.amount, 0) + acc.contributions.filter(x => x.type !== "배당").reduce((n, x) => n + x.amount, 0),
+        dividend: acc.pastContributions.reduce((n, x) => n + x.dividend, 0) + acc.contributions.filter(x => x.type === "배당").reduce((n, x) => n + x.amount, 0)
+      };
+    }
+    function settleAccount(acc, year) {
+      const older = acc.contributions.filter(c => Number(c.month.slice(0, 4)) < year);
+      if (!older.length) throw new Error("마감할 과거 연도 데이터가 없습니다.");
+      // 이미 누적합계에 포함된 금액인지 알 수 없는 중복 연도는 삭제하지 않고 중단합니다.
+      if (older.some(c => acc.pastContributions.some(p => p.year === Number(c.month.slice(0, 4))))) throw new Error("과거 합계와 월별 내역에 같은 연도가 있습니다. 중복 여부 확인 전에는 마감할 수 없습니다.");
+      const sums = new Map();
+      older.forEach(c => {
+        const y = Number(c.month.slice(0, 4));
+        const v = sums.get(y) || { id: `settled-${y}`, year: y, amount: 0, dividend: 0 };
+        if (c.type === "배당") v.dividend += c.amount; else v.amount += c.amount;
+        sums.set(y, v);
+      });
+      const next = { ...acc, pastContributions: [...acc.pastContributions, ...sums.values()], contributions: acc.contributions.filter(c => Number(c.month.slice(0, 4)) >= year) };
+      const before = contributionTotals(acc), after = contributionTotals(next);
+      if (Math.abs(before.principal - after.principal) > 0.001 || Math.abs(before.dividend - after.dividend) > 0.001) throw new Error("마감 전후 합계가 달라 작업을 중단했습니다.");
+      return next;
+    }
+
     // 파킹형 자산 및 분리 계산용 Helper 함수
+    // @section asset-math | 자산 평가·위험자산·리밸런싱 날짜
     const isParkingAsset = (a) => Boolean(a.parkingAsset);
     const getAssetMarketValue = (a) => (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
     const getParkingAssetValue = (assets) => assets.filter(isParkingAsset).reduce((sum, a) => sum + getAssetMarketValue(a), 0);
     const getAllocationAssets = (assets) => assets.filter(a => !isParkingAsset(a));
     const getAllocationBaseValue = (assets) => getAllocationAssets(assets).reduce((sum, a) => sum + getAssetMarketValue(a), 0);
 
-    const getRiskWeight = (a) => {
-      if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
-        return (a.stockRatio ?? 30) / 100;
-      }
-      if (a.assetType === "위험자산") return 1.0;
-      return 0.0;
+    // 규정용 비중은 사용자가 지정한 상품 분류를 적용합니다.
+    const getRiskWeight = a => a.assetType === "위험자산" ? 1 : 0;
+    const getEquityExposureWeight = a => {
+      if (MIXED_ASSET_CATEGORIES.includes(a.category)) return Math.max(0, Math.min(100, Number(a.stockRatio ?? 30))) / 100;
+      return /주식|S&P500|나스닥|CSI300|한국200/.test(a.category) ? 1 : 0;
     };
-
-    const getEquityExposureWeight = (a) => {
-      if (MIXED_ASSET_CATEGORIES.includes(a.category)) {
-        return (a.stockRatio ?? 30) / 100;
+    const REBALANCE_RULES = [
+      { id: "annual", label: "연 1회", months: 12 },
+      { id: "semiannual", label: "반기", months: 6 },
+      { id: "quarterly", label: "분기", months: 3 },
+      { id: "monthly", label: "매월", months: 1 },
+    ];
+    const getRebalanceRule = (frequency) => REBALANCE_RULES.find(r => r.id === frequency) || REBALANCE_RULES[0];
+    function rebalanceScheduleLabel(acc) {
+      const rule = getRebalanceRule(acc.rebalanceFrequency);
+      if (rule.months === 1) return `매월 ${acc.rebalanceDay}일`;
+      const months = Array.from({ length: 12 }, (_, i) => i + 1)
+        .filter(m => (m - acc.rebalanceMonth + 12) % rule.months === 0);
+      return `${rule.label} · ${months.join("·")}월 ${acc.rebalanceDay}일`;
+    }
+    function nextRebalance(month, day, now = new Date(), frequency = "annual") {
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const interval = getRebalanceRule(frequency).months;
+      // 매 회차는 원래 기준 일로 계산해 2월 말일 보정이 다음 달로 이어지지 않게 합니다.
+      for (let offset = 0; offset <= 12; offset++) {
+        const first = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+        const candidateMonth = first.getMonth() + 1;
+        if ((candidateMonth - month + 12) % interval !== 0) continue;
+        const lastDay = new Date(first.getFullYear(), candidateMonth, 0).getDate();
+        const target = new Date(first.getFullYear(), candidateMonth - 1, Math.min(day, lastDay));
+        if (target < today) continue;
+        const utcDay = d => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+        return { date: localDateKey(target), days: Math.round((utcDay(target) - utcDay(today)) / 86400000) };
       }
-      if (a.assetType === "위험자산") return 1.0;
-      return 0.0;
-    };
+    }
 
+    // @section order-plan | 매수·매도·수수료 계획
+    const ORDER_FEE_RATE = 0.002; // 수수료 여유금; 실제 증권사 수수료와 다를 수 있음
+    const isCashAsset = a => isParkingAsset(a) && !String(a.code || "").trim() && a.name.trim() === "예수금";
+    const getCashValue = assets => assets.filter(isCashAsset).reduce((n, a) => n + getAssetMarketValue(a), 0);
+    const getParkingSecuritiesValue = assets => assets.filter(a => isParkingAsset(a) && !isCashAsset(a)).reduce((n, a) => n + getAssetMarketValue(a), 0);
+    const orderPrice = a => Number(a.currentPrice || a.price) || 0;
+    function allocateBuyOrders(items, budget, limit = Infinity) {
+      const eligible = items.filter(x => x.deficit > 0 && x.cp > 0).sort((a, b) => b.deficit - a.deficit).slice(0, limit);
+      const deficitTotal = eligible.reduce((n, x) => n + x.deficit, 0);
+      const orders = [];
+      let cash = Math.max(0, budget);
+      eligible.forEach(item => {
+        const allowance = Math.min(budget * item.deficit / deficitTotal, cash);
+        const shares = Math.min(Math.floor(allowance / (item.cp * (1 + ORDER_FEE_RATE))), Math.floor(item.deficit / item.cp));
+        if (shares > 0) {
+          const cost = shares * item.cp, fee = cost * ORDER_FEE_RATE;
+          orders.push({ ...item, shares, cost, fee }); cash -= cost + fee;
+        }
+      });
+      // 잔여금도 부족 금액·수수료 한도 내에서만 배분합니다.
+      for (const item of eligible) {
+        const existing = orders.find(o => o.assetId === item.assetId);
+        const spent = existing ? existing.cost : 0;
+        const shares = Math.min(Math.floor((cash + 1e-8) / (item.cp * (1 + ORDER_FEE_RATE))), Math.floor((item.deficit - spent + 1e-8) / item.cp));
+        if (shares <= 0) continue;
+        const cost = shares * item.cp, fee = cost * ORDER_FEE_RATE;
+        if (existing) { existing.shares += shares; existing.cost += cost; existing.fee += fee; }
+        else orders.push({ ...item, shares, cost, fee });
+        cash -= cost + fee;
+      }
+      return { orders, remainingCash: Math.max(0, cash) };
+    }
+    // 현금 투입 후 목표 금액 대비 부족분을 같은 높이로 낮추는 배분입니다.
+    // 동일 총자산을 분모로 사용하므로 부족 금액 비교는 부족 비중(%p) 비교와 같습니다.
+    function allocateGapBuyOrders(items, budget) {
+      const initialCash = Number.isFinite(budget) ? Math.max(0, budget) : 0;
+      const rows = items.filter(x => Number.isFinite(x.deficit) && x.deficit > 0 && Number.isFinite(x.cp) && x.cp > 0)
+        .map(item => ({ ...item, shares: 0, cost: 0, fee: 0 })).sort((a, b) => b.deficit - a.deficit);
+      let cash = initialCash;
+      const remaining = row => row.deficit - row.cost;
+      const canBuy = row => row.cp * (1 + ORDER_FEE_RATE) <= cash + 1e-8 && row.cp <= remaining(row) + 1e-8;
+      const buy = (row, count) => {
+        row.shares += count;
+        row.cost = row.shares * row.cp;
+        row.fee = row.cost * ORDER_FEE_RATE;
+        // 주문별 합계로 다시 계산해 반복 차감에 의한 누적 오차를 피합니다.
+        cash = Math.max(0, initialCash - rows.reduce((n, r) => n + r.cost + r.fee, 0));
+      };
+      while (true) {
+        const eligible = rows.filter(canBuy).sort((a, b) => remaining(b) - remaining(a));
+        if (!eligible.length) break;
+        // 공통 잔여 부족분(level)을 구하고 그 위의 부족분부터 함께 채웁니다.
+        let low = 0, high = remaining(eligible[0]);
+        const purchaseBudget = cash / (1 + ORDER_FEE_RATE);
+        for (let i = 0; i < 64; i++) {
+          const level = (low + high) / 2;
+          const needed = eligible.reduce((n, row) => n + Math.max(0, remaining(row) - level), 0);
+          if (needed > purchaseBudget) low = level; else high = level;
+        }
+        const quotas = eligible.map(row => ({ row, amount: Math.max(0, remaining(row) - high) }));
+        let purchased = false;
+        for (const { row, amount } of quotas) {
+          const count = Math.min(Math.floor((amount + 1e-8) / row.cp), Math.floor((remaining(row) + 1e-8) / row.cp), Math.floor((cash + 1e-8) / (row.cp * (1 + ORDER_FEE_RATE))));
+          if (count > 0) { buy(row, count); purchased = true; }
+        }
+        // 정수 주 반올림으로 남은 돈은 매수 가능한 것 중 가장 부족한 곳부터 재비교합니다.
+        if (!purchased) buy(eligible[0], 1);
+      }
+      return { orders: rows.filter(row => row.shares > 0), remainingCash: cash };
+    }
+
+    function calculateBuyPlan(acc, actualCash, parkingRatio = 0) {
+      const allocationBaseValue = getAllocationBaseValue(acc.assets);
+      const planErrors = [];
+      const targetSum = acc.targetPortfolio.reduce((n, t) => n + Number(t.value || 0), 0);
+      const names = acc.targetPortfolio.map(t => t.name.trim());
+      const invalidTarget = Math.abs(targetSum - 100) > 0.000001 || new Set(names).size !== names.length || acc.targetPortfolio.some(t => !finiteNonnegative(t.value) || !t.name.trim());
+      const empty = { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: actualCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: actualCash, planErrors };
+      if (invalidTarget || !acc.targetPortfolio.some(t => t.value > 0)) return empty;
+      const targets = acc.targetPortfolio.filter(t => t.name !== "현금/단기채" || acc.assets.some(a => !isParkingAsset(a) && a.category === t.name));
+      const activeSum = targets.reduce((n, t) => n + t.value, 0);
+      if (activeSum <= 0) return { ...empty, invalidTarget: true };
+      const categories = [...targets.map(t => ({ ...t, targetWeight: t.value / activeSum * 100 }))];
+      acc.assets.filter(a => !isParkingAsset(a)).forEach(a => {
+        if (!categories.some(t => t.name === a.category)) categories.push({ name: a.category, targetWeight: 0, color: "#94a3b8" });
+      });
+      const representative = category => {
+        const candidates = acc.assets.filter(a => !isParkingAsset(a) && a.category === category);
+        const selectedId = (acc.preferredBuyAssets || {})[category];
+        return candidates.find(a => String(a.id) === String(selectedId)) || candidates[0];
+      };
+      const currentPortfolio = categories.map(t => {
+        const categoryValue = acc.assets.filter(a => !isParkingAsset(a) && a.category === t.name).reduce((n, a) => n + getAssetMarketValue(a), 0);
+        if (t.targetWeight > 0 && !representative(t.name)) planErrors.push(`${t.name}: 매수할 종목을 등록해주세요.`);
+        return { ...t, categoryValue, value: allocationBaseValue > 0 ? categoryValue / allocationBaseValue * 100 : 0 };
+      });
+      const generatedParkingSellOrders = [];
+      let requested = Math.floor(getParkingSecuritiesValue(acc.assets) * Math.max(0, Math.min(100, parkingRatio)) / 100);
+      for (const a of acc.assets.filter(a => isParkingAsset(a) && !isCashAsset(a))) {
+        const cp = orderPrice(a);
+        if (requested <= 0 || cp <= 0) continue;
+        const shares = Math.min(Math.floor(a.quantity), Math.floor(requested / cp));
+        if (shares > 0) {
+          generatedParkingSellOrders.push({ name: a.category, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: 0, targetWeight: 0, profit: shares * (cp - a.price), isParkingLiquidation: true });
+          requested -= shares * cp;
+        }
+      }
+      const parkingGross = generatedParkingSellOrders.reduce((n, o) => n + -o.shares * o.currentPrice, 0);
+      const deployParkingCash = parkingGross * (1 - ORDER_FEE_RATE);
+      const deployCash = Math.max(0, actualCash) + deployParkingCash;
+      const targetBase = allocationBaseValue + deployCash;
+      const buyItems = currentPortfolio.map(p => {
+        const a = representative(p.name);
+        return { name: p.name, assetName: a?.name || p.name, assetId: a?.id, cp: a ? orderPrice(a) : 0, deficit: targetBase * p.targetWeight / 100 - p.categoryValue };
+      });
+      const buyOnly = allocateGapBuyOrders(buyItems, deployCash);
+      const normalSells = [];
+      currentPortfolio.forEach(p => {
+        let excess = Math.max(0, p.categoryValue - targetBase * p.targetWeight / 100);
+        for (const a of acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name)) {
+          const cp = orderPrice(a);
+          if (cp <= 0) continue;
+          const shares = Math.min(Math.floor(a.quantity), Math.floor((excess + 1e-8) / cp));
+          if (shares > 0) {
+            normalSells.push({ name: p.name, assetName: a.name, assetId: a.id, shares: -shares, currentPrice: cp, currentWeight: p.value.toFixed(2), targetWeight: p.targetWeight.toFixed(2), profit: shares * (cp - a.price), isParkingLiquidation: false });
+            excess -= shares * cp;
+          }
+        }
+      });
+      const saleOrders = [...generatedParkingSellOrders, ...normalSells];
+      const totalSellAmt = saleOrders.reduce((n, o) => n + -o.shares * o.currentPrice, 0);
+      const fee = totalSellAmt * ORDER_FEE_RATE;
+      const fullBuys = allocateBuyOrders(buyItems, Math.max(0, actualCash) + totalSellAmt - fee);
+      const fullRebalancePlan = [...saleOrders, ...fullBuys.orders.map(o => {
+        const p = currentPortfolio.find(p => p.name === o.name);
+        return { ...o, currentPrice: o.cp, currentWeight: p.value.toFixed(2), targetWeight: p.targetWeight.toFixed(2), profit: 0, isParkingLiquidation: false };
+      })];
+      let priority = 0;
+      const deviationData = currentPortfolio.map(p => {
+        const matches = acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name);
+        return { ...p, currentWeight: p.value, gap: p.value - p.targetWeight, deficitAmount: allocationBaseValue * p.targetWeight / 100 - p.categoryValue, assetName: matches.length > 1 ? `${matches[0].name} 외 ${matches.length - 1}개` : matches[0]?.name || "" };
+      }).sort((a, b) => b.deficitAmount - a.deficitAmount).map(p => ({ ...p, priority: p.deficitAmount > 0 ? ++priority : null }));
+      return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, fullRemainingCash: fullBuys.remainingCash };
+    }
+
+    // @section buy-preview | 권장 매수 후 비중 시뮬레이션
+    function calculateBuyPreview(plan) {
+      const portfolio = plan.currentPortfolio || [];
+      const orders = plan.buyOrders || [];
+      const beforeTotal = portfolio.reduce((sum, row) => sum + row.categoryValue, 0);
+      const purchaseCost = orders.reduce((sum, order) => sum + order.cost, 0);
+      const purchaseFee = orders.reduce((sum, order) => sum + order.fee, 0);
+      const afterTotal = beforeTotal + purchaseCost;
+      const weight = (value, total) => total > 0 ? value / total * 100 : null;
+      const rows = portfolio.map(row => {
+        const addedValue = orders.filter(order => order.name === row.name).reduce((sum, order) => sum + order.cost, 0);
+        const afterValue = row.categoryValue + addedValue;
+        const beforeWeight = weight(row.categoryValue, beforeTotal);
+        const afterWeight = weight(afterValue, afterTotal);
+        return { name: row.name, color: row.color, targetWeight: row.targetWeight, beforeValue: row.categoryValue,
+          afterValue, addedValue, beforeWeight, afterWeight,
+          afterGap: afterWeight === null ? null : afterWeight - row.targetWeight };
+      });
+      return { rows, beforeTotal, afterTotal, purchaseCost, purchaseFee, remainingCash: plan.remainingCash || 0 };
+    }
+
+    function BuyPreview({ plan }) {
+      const preview = calculateBuyPreview(plan);
+      const percent = value => value === null ? "—" : formatPercent(value);
+      const gap = value => value === null ? "—" : `${Number(value.toFixed(2)) > 0 ? "+" : ""}${Number(value.toFixed(2)).toFixed(2)}%p`;
+      const rows = [...preview.rows].sort((a, b) => ((a.beforeWeight || 0) - a.targetWeight) - ((b.beforeWeight || 0) - b.targetWeight));
+      return (
+        <details open className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+          <summary className="cursor-pointer text-sm font-bold text-slate-800">권장 매수 후 비중 미리보기</summary>
+          <div className="mt-5 space-y-5">
+            <p className="text-[11px] leading-relaxed text-slate-500">권장 수량을 현재가로 모두 매수한 예상 결과입니다. 비중은 파킹·예수금을 제외한 투자자산 기준입니다.</p>
+            <div className="grid grid-cols-3 gap-2 border-y border-slate-100 py-3 text-center text-[10px] text-slate-500">
+              <div><p>예상 매수금액</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseCost))}</p></div>
+              <div><p>매수 수수료 여유금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.purchaseFee))}</p></div>
+              <div><p>예상 잔여 현금</p><p className="mt-1 font-bold text-slate-800 break-all">₩{fmt(Math.round(preview.remainingCash))}</p></div>
+            </div>
+            {!plan.buyOrders.length && <p className="text-xs text-slate-500">권장 매수가 없어 현재 비중을 그대로 표시합니다.</p>}
+            <p className="text-[10px] text-slate-400">막대: 매수 후 · 가는 실선: 현재 · 점선: 목표 / 우측 괴리는 매수 후 기준</p>
+            <div className="space-y-6">
+              {rows.map((row, index) => {
+                const beforeGap = row.beforeWeight === null ? null : row.beforeWeight - row.targetWeight;
+                const previous = (plan.deviationData || []).find(item => item.name === row.name);
+                const priority = previous?.priority || index + 1;
+                const isDeficit = row.afterGap !== null && row.afterGap < -0.5;
+                const isSurplus = row.afterGap !== null && row.afterGap > 0.5;
+                const shortage = Math.abs(preview.afterTotal * row.targetWeight / 100 - row.afterValue);
+                const maxScale = Math.max(row.targetWeight, row.beforeWeight || 0, row.afterWeight || 0) * 1.2;
+                const scale = weight => maxScale > 0 ? (weight || 0) / maxScale * 100 : 0;
+                const badgeColor = priority === 1 ? "bg-rose-100 text-rose-600" : priority === 2 ? "bg-amber-100 text-amber-600" : "bg-slate-200 text-slate-600";
+                return (
+                  <div key={row.name}>
+                    <div className="flex flex-wrap sm:flex-nowrap justify-between items-end gap-2 mb-1.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {beforeGap !== null && beforeGap < -0.5 ? (
+                          <span className={`${badgeColor} px-1.5 py-0.5 rounded text-[10px] font-black flex-shrink-0`}>{priority}순위</span>
+                        ) : beforeGap !== null && beforeGap > 0.5 ? (
+                          <span className="text-blue-500 font-black text-[10px] flex-shrink-0">초과</span>
+                        ) : <span className="text-emerald-500 font-black text-[10px] flex-shrink-0">{beforeGap === null ? "—" : "✓"}</span>}
+                        <div className="min-w-0">
+                          <span className="text-sm font-bold text-slate-800">{row.name}</span>
+                          {previous?.assetName && <span className="hidden sm:inline text-xs font-medium text-slate-400"> · {previous.assetName}</span>}
+                          {previous?.assetName && <p className="sm:hidden text-[10px] font-medium text-slate-400 truncate leading-tight">{previous.assetName}</p>}
+                        </div>
+                      </div>
+                      <div className="text-[11px] ml-auto flex-shrink-0">
+                        {row.afterGap === null ? <span className="text-slate-400">비중 산정 불가</span> : isDeficit ? (
+                          <span className="text-amber-500 font-bold">▼ {gap(row.afterGap)} / ₩{fmt(Math.round(shortage))} 부족</span>
+                        ) : isSurplus ? (
+                          <span className="text-blue-500 font-bold">▲ {gap(row.afterGap)} / ₩{fmt(Math.round(shortage))} 초과</span>
+                        ) : <span className="text-emerald-500 font-bold">✓ 균형 · {gap(row.afterGap)}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="relative flex-1 min-w-0 h-3 bg-slate-100 rounded-full overflow-hidden" aria-hidden="true">
+                        <div className="absolute inset-y-0 left-0 rounded-full transition-all duration-500" style={{ width: `${scale(row.afterWeight)}%`, backgroundColor: row.color || "#6366f1" }} />
+                        {row.beforeWeight !== null && <div className="absolute top-0 bottom-0 border-l border-slate-500 z-10" style={{ left: `${scale(row.beforeWeight)}%` }} />}
+                        <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-400 z-20" style={{ left: `${scale(row.targetWeight)}%`, marginLeft: '-1px' }} />
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-500 w-28 sm:w-48 text-right flex-shrink-0">
+                        <span className="block sm:inline">현재 <span className="text-slate-800">{percent(row.beforeWeight)}</span><span className="hidden sm:inline"> → </span></span>
+                        <span className="block sm:inline">매수 후 <span className="text-slate-800">{percent(row.afterWeight)}</span></span>
+                        <span className="block">목표 {percent(row.targetWeight)}</span>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-400">{row.addedValue > 0 ? `+₩${fmt(Math.round(row.addedValue))} 매수` : "추가 매수 없음"}</p>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[10px] leading-relaxed text-slate-400">순위는 현재 괴리율 기준입니다. 수수료와 잔여 현금은 투자 비중에 포함하지 않습니다. 실제 체결 가격에 따라 결과가 달라질 수 있으며, 미리보기는 보유수량을 변경하지 않습니다.</p>
+          </div>
+        </details>
+      );
+    }
+
+    // @section tip | 공통 도움말
     function Tip({ text }) {
       const [show, setShow] = useState(false);
       const ref = useRef(null);
@@ -273,134 +641,128 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // ── 자산 추이 SVG 라인차트 ──
-    function HistoryChart({ history, accountKey, accountMeta }) {
-      const [range, setRange] = React.useState("all"); // day/week/month/year/all
-      const [hover, setHover] = React.useState(null);
+    // @section aggregation | 종목코드별 계좌 합산
+    function mergeAccountAssets(accounts, keys = ACCOUNT_KEYS) {
+      const grouped = new Map();
+      for (const accountKey of keys) {
+        const acc = accounts[accountKey];
+        if (!acc) continue;
+        for (const a of acc.assets || []) {
+          const code = String(a.code || "").trim().toUpperCase();
+          const mergeKey = code ? `code:${code}` : isCashAsset(a) ? "cash:KRW" : `manual:${accountKey}:${a.id}`;
+          if (!grouped.has(mergeKey)) grouped.set(mergeKey, { mergeKey, name: a.name || "종목명 없음", code, category: a.category || "", totalMarketValue: 0, totalBookValue: 0, totalQuantity: 0, color: null, isCash: isCashAsset(a), prices: new Set() });
+          const item = grouped.get(mergeKey);
+          item.totalMarketValue += getAssetMarketValue(a);
+          item.totalBookValue += (Number(a.quantity) || 0) * (Number(a.price) || 0);
+          item.totalQuantity += Number(a.quantity) || 0;
+          if (a.quantity > 0 && code) item.prices.add(orderPrice(a));
+          if (!item.color) item.color = (acc.targetPortfolio || []).find(t => t.name === a.category)?.color || null;
+        }
+      }
+      const total = [...grouped.values()].reduce((n, a) => n + a.totalMarketValue, 0);
+      return [...grouped.values()].sort((a, b) => b.totalMarketValue - a.totalMarketValue).map((a, i) => ({
+        mergeKey: a.mergeKey, name: a.name, code: a.code, category: a.category, isCash: a.isCash,
+        totalMarketValue: a.totalMarketValue, totalQuantity: a.totalQuantity,
+        avgPrice: a.totalQuantity > 0 ? Math.round(a.totalBookValue / a.totalQuantity) : 0,
+        returnAmt: a.totalMarketValue - a.totalBookValue,
+        returnRate: a.totalBookValue > 0 ? (a.totalMarketValue - a.totalBookValue) / a.totalBookValue * 100 : 0,
+        pct: total > 0 ? Number((a.totalMarketValue / total * 100).toFixed(1)) : 0,
+        color: a.color || DEFAULT_COLORS[i % DEFAULT_COLORS.length], priceMismatch: a.prices.size > 1
+      }));
+    }
+    // @section quote-status | 가격 갱신 상태
+    function quoteStatus(asset, now = new Date()) {
+      if (!String(asset.code || "").trim()) return { text: "수동 입력", today: false };
+      const failed = Number.isFinite(Date.parse(asset.priceFetchFailedAt));
+      if (asset.priceSource === "manual") return { text: failed ? "조회 실패 · 직접 입력값 사용" : "현재가 직접 입력", today: false };
+      const parsed = Date.parse(asset.priceUpdatedAt);
+      if (!Number.isFinite(parsed)) return { text: failed ? "조회 실패 · 기존 입력값 사용" : "조회 기록 없음 · 입력값 사용", today: false };
+      const date = new Date(parsed);
+      const today = localDateKey(date) === localDateKey(now);
+      return { text: `${failed ? "조회 실패 · 마지막 성공 " : "조회 "}${date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`, today: today && !failed };
+    }
 
+    // @section history-chart | 자산 추이 계산·차트
+    function historyPoints(history, accountKey, days, now = new Date()) {
+      const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+      const byDate = new Map();
+      for (const row of Array.isArray(history) ? history : []) {
+        if (!row || !validDate(row.date)) continue;
+        const [y, m, d] = row.date.split("-").map(Number);
+        const day = Date.UTC(y, m - 1, d);
+        const age = (today - day) / 86400000;
+        if (age < 0 || age > days) continue;
+        const values = accountKey === "total" ? { value: row.totalValue, principal: row.totalPrincipal, dividend: row.totalDividend } : row.accounts?.[accountKey];
+        if (!values || ![values.value, values.principal, values.dividend].every(finiteNonnegative)) continue;
+        byDate.set(row.date, { date: row.date, day, value: values.value, principal: values.principal, dividend: values.dividend });
+      }
+      const rows = [...byDate.values()].sort((a, b) => a.day - b.day);
+      if (rows.length <= 60) return rows;
+      // 시작과 마지막 기록을 포함해 최대 60개 표시. 원본 이력은 삭제하지 않습니다.
+      return Array.from({ length: 60 }, (_, i) => rows[Math.round(i * (rows.length - 1) / 59)]);
+    }
+    function HistoryChart({ history, accountKey }) {
+      const [range, setRange] = React.useState("all");
+      const [selection, setSelection] = React.useState(null);
       const RANGES = [
-        { key: "day", label: "일", days: 30 },
-        { key: "week", label: "주", days: 90 },
-        { key: "month", label: "월", days: 365 },
-        { key: "year", label: "년", days: 1825 },
+        { key: "day", label: "1개월", days: 30 },
+        { key: "week", label: "3개월", days: 90 },
+        { key: "month", label: "1년", days: 365 },
+        { key: "year", label: "5년", days: 1825 },
         { key: "all", label: "전체", days: Infinity },
       ];
-
-      // 계좌별/통합 값 추출
-      const pick = (row) => {
-        if (accountKey === "total") {
-          return { value: row.totalValue || 0, principal: row.totalPrincipal || 0, dividend: row.totalDividend || 0 };
-        }
-        const a = (row.accounts && row.accounts[accountKey]) || {};
-        return { value: a.value || 0, principal: a.principal || 0, dividend: a.dividend || 0 };
-      };
-
-      // 기간 필터
-      const now = new Date();
-      const cutoffDays = (RANGES.find(r => r.key === range) || {}).days;
-      let rows = (history || []).filter(r => {
-        if (cutoffDays === Infinity) return true;
-        const d = new Date(r.date + "T00:00:00");
-        return (now - d) / 86400000 <= cutoffDays;
-      });
-
-      // 다운샘플링: 점이 60개 넘으면 균등 솎기
-      const MAX_PTS = 60;
-      if (rows.length > MAX_PTS) {
-        const step = Math.ceil(rows.length / MAX_PTS);
-        rows = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
-      }
-
-      const pts = rows.map(r => ({ date: r.date, ...pick(r) }));
-
+      const pts = historyPoints(history, accountKey, RANGES.find(r => r.key === range)?.days ?? Infinity);
+      const selectedIndex = selection?.accountKey === accountKey && selection?.range === range ? pts.findIndex(p => p.date === selection.date) : -1;
+      const index = selectedIndex >= 0 ? selectedIndex : pts.length - 1;
+      const selected = pts[index];
+      const select = i => { if (pts[i]) setSelection({ date: pts[i].date, accountKey, range }); };
       const W = 320, H = 180, padL = 8, padR = 8, padT = 14, padB = 22;
       const innerW = W - padL - padR, innerH = H - padT - padB;
-
-      let content;
-      if (pts.length === 0) {
-        content = <div className="text-center text-xs text-slate-400 py-12">아직 기록된 이력이 없습니다.<br/>앱을 열 때마다 하루씩 쌓입니다.</div>;
-      } else {
-        const allVals = pts.flatMap(p => [p.value, p.principal, p.dividend]);
-        const maxV = Math.max(...allVals, 1);
-        const minV = 0;
-        const n = pts.length;
-        const x = (i) => padL + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
-        const y = (v) => padT + innerH - (innerH * (v - minV)) / (maxV - minV);
-
-        const linePath = (key) => pts.map((p, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p[key]).toFixed(1)}`).join(" ");
-
-        const series = [
-          { key: "value", color: "#3b82f6", label: "평가액" },
-          { key: "principal", color: "#94a3b8", label: "원금" },
-          { key: "dividend", color: "#f59e0b", label: "배당" },
-        ];
-
-        content = (
-          <div className="relative">
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }}
-              onMouseLeave={() => setHover(null)}>
-              {/* 가로 기준선 */}
-              {[0.25, 0.5, 0.75].map((f, i) => (
-                <line key={i} x1={padL} x2={W - padR} y1={padT + innerH * f} y2={padT + innerH * f}
-                  stroke="#f1f5f9" strokeWidth="1" />
-              ))}
-              {/* 선 3개 */}
-              {series.map(s => (
-                <path key={s.key} d={linePath(s.key)} fill="none" stroke={s.color} strokeWidth="2"
-                  strokeLinejoin="round" strokeLinecap="round" />
-              ))}
-              {/* 마지막 점 강조 */}
-              {series.map(s => (
-                <circle key={s.key} cx={x(n - 1)} cy={y(pts[n - 1][s.key])} r="2.5" fill={s.color} />
-              ))}
-              {/* 호버 감지용 투명 세로 밴드 */}
-              {pts.map((p, i) => (
-                <rect key={i} x={x(i) - (innerW / Math.max(n - 1, 1)) / 2} y={padT}
-                  width={innerW / Math.max(n - 1, 1)} height={innerH} fill="transparent"
-                  onMouseEnter={() => setHover(i)} />
-              ))}
-              {/* 호버 세로선 */}
-              {hover !== null && (
-                <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT + innerH} stroke="#cbd5e1" strokeWidth="1" strokeDasharray="3 3" />
-              )}
-              {/* x축 양끝 날짜 */}
-              <text x={padL} y={H - 6} fontSize="8" fill="#94a3b8">{pts[0].date.slice(5)}</text>
-              <text x={W - padR} y={H - 6} fontSize="8" fill="#94a3b8" textAnchor="end">{pts[n - 1].date.slice(5)}</text>
-            </svg>
-            {/* 호버 툴팁 */}
-            {hover !== null && (
-              <div className="absolute top-0 left-0 right-0 bg-slate-800 text-white text-[10px] rounded-lg px-3 py-2 pointer-events-none">
-                <div className="font-bold mb-1">{pts[hover].date}</div>
-                <div className="flex justify-between gap-3"><span style={{color:"#93c5fd"}}>평가액</span><span>₩{fmt(pts[hover].value)}</span></div>
-                <div className="flex justify-between gap-3"><span style={{color:"#cbd5e1"}}>원금</span><span>₩{fmt(pts[hover].principal)}</span></div>
-                <div className="flex justify-between gap-3"><span style={{color:"#fcd34d"}}>배당</span><span>₩{fmt(pts[hover].dividend)}</span></div>
-              </div>
-            )}
-          </div>
-        );
-      }
-
+      const n = pts.length;
+      const firstDay = pts[0]?.day || 0, lastDay = pts[n - 1]?.day || 0;
+      // 기록이 없는 날도 실제 날짜 간격을 반영합니다.
+      const x = i => padL + (lastDay === firstDay ? innerW / 2 : innerW * (pts[i].day - firstDay) / (lastDay - firstDay));
+      const maxV = Math.max(1, ...pts.flatMap(p => [p.value, p.principal, p.dividend]));
+      const y = value => padT + innerH - innerH * value / maxV;
+      const series = [
+        { key: "value", color: "#3b82f6", label: "평가액" },
+        { key: "principal", color: "#94a3b8", label: "원금" },
+        { key: "dividend", color: "#f59e0b", label: "배당" },
+      ];
       return (
         <div>
-          {/* 기간 버튼 */}
-          <div className="flex gap-1 mb-3">
-            {RANGES.map(r => (
-              <button key={r.key} onClick={() => setRange(r.key)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${range === r.key ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}>
-                {r.label}
-              </button>
-            ))}
-          </div>
-          {content}
-          {/* 범례 */}
-          <div className="flex justify-center gap-4 mt-3 text-[10px] font-bold">
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#3b82f6"}}></span>평가액</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#94a3b8"}}></span>원금</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full inline-block" style={{background:"#f59e0b"}}></span>배당</span>
-          </div>
+          <div className="flex flex-wrap gap-1 mb-3">{RANGES.map(r => <button key={r.key} aria-pressed={range === r.key} onClick={() => { setRange(r.key); setSelection(null); }} className={`px-2.5 py-2 rounded-lg text-xs font-bold ${range === r.key ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500"}`}>{r.label}</button>)}</div>
+          {!n ? <div className="text-center text-xs text-slate-400 py-12">선택한 기간에 기록된 이력이 없습니다.</div> : (
+            <div>
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" tabIndex={0} aria-label={`자산 추이, ${pts[0].date}부터 ${pts[n - 1].date}. 좌우 방향키로 날짜를 선택하세요.`} onKeyDown={e => { if (["ArrowLeft", "ArrowRight"].includes(e.key)) { e.preventDefault(); select(Math.max(0, Math.min(n - 1, index + (e.key === "ArrowRight" ? 1 : -1)))); } }}>
+                {[0.25, 0.5, 0.75].map(f => <line key={f} x1={padL} x2={W - padR} y1={padT + innerH * f} y2={padT + innerH * f} stroke="#f1f5f9" />)}
+                {series.map(item => <path key={item.key} d={pts.map((p, i) => `${i ? "L" : "M"} ${x(i).toFixed(1)} ${y(p[item.key]).toFixed(1)}`).join(" ")} fill="none" stroke={item.color} strokeWidth="2" strokeLinejoin="round" />)}
+                {pts.map((p, i) => {
+                  const left = i ? (x(i - 1) + x(i)) / 2 : padL;
+                  const right = i < n - 1 ? (x(i) + x(i + 1)) / 2 : W - padR;
+                  return <rect key={p.date} x={left} y={padT} width={Math.max(1, right - left)} height={innerH} fill="transparent" onPointerDown={() => select(i)} onPointerEnter={e => { if (e.pointerType === "mouse") select(i); }} />;
+                })}
+                <line x1={x(index)} x2={x(index)} y1={padT} y2={padT + innerH} stroke="#94a3b8" strokeDasharray="3 3" pointerEvents="none" />
+                {series.map(item => <circle key={item.key} cx={x(index)} cy={y(selected[item.key])} r="3" fill={item.color} pointerEvents="none" />)}
+                <text x={padL} y={H - 6} fontSize="9" fill="#64748b">{pts[0].date.slice(5)}</text>
+                <text x={W - padR} y={H - 6} fontSize="9" fill="#64748b" textAnchor="end">{pts[n - 1].date.slice(5)}</text>
+              </svg>
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                <div className="flex justify-between items-center mb-2">
+                  <button type="button" aria-label="이전 기록" disabled={index <= 0} onClick={() => select(index - 1)} className="px-3 py-2 rounded-lg bg-white border text-xs font-bold disabled:opacity-30">이전</button>
+                  <span className="text-xs font-bold text-slate-700">{selected.date}</span>
+                  <button type="button" aria-label="다음 기록" disabled={index >= n - 1} onClick={() => select(index + 1)} className="px-3 py-2 rounded-lg bg-white border text-xs font-bold disabled:opacity-30">다음</button>
+                </div>
+                {series.map(item => <div key={item.key} className="flex justify-between text-xs py-1"><span style={{ color: item.color }}>{item.label}</span><span className="font-bold text-slate-700">₩{fmt(selected[item.key])}</span></div>)}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-2">차트를 터치하거나 이전·다음 버튼으로 기록을 확인하세요. 긴 기간은 최대 60개 기록을 표시합니다.</p>
+            </div>
+          )}
         </div>
       );
     }
 
+    // @section charts | 비중 차트·수익 배지
     function DonutChart({ data, title, subtitle, centerLabel = "총 비중" }) {
       const rawTotal = data.reduce((s, d) => s + (Number(d.value) || 0), 0);
       const normalizeFactor = rawTotal > 0 ? 100 / rawTotal : 1;
@@ -432,14 +794,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="text-[10px] text-slate-400 font-semibold">{centerLabel}</span>
-              <span className="text-xl font-black text-slate-800">{Math.round(rawTotal)}%</span>
+              <span className="text-xl font-black text-slate-800">{formatPercent(rawTotal)}</span>
             </div>
           </div>
           <div className="mt-4 w-full flex flex-wrap justify-center gap-1.5">
             {data.map((s, i) => (
               <span key={i} className="flex items-center text-[11px] bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-full font-semibold text-slate-700">
                 <span className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0" style={{ background: s.color }}></span>
-                {s.name} <span className="ml-1 font-bold text-slate-500">{s.value}%</span>
+                {s.name} <span className="ml-1 font-bold text-slate-500">{formatPercent(s.value)}</span>
               </span>
             ))}
           </div>
@@ -458,6 +820,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // @section selectors | 목표비중·자산 선택 컴포넌트
     function TargetCategorySelector({ t, i, curAcc, updateAcc }) {
       const [showDropdown, setShowDropdown] = useState(false);
       const [customMode, setCustomMode] = useState(false);
@@ -633,59 +996,74 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     // ── 자산 이력 저장소 (IndexedDB) ──
+    // @section history-storage | IndexedDB 이력 저장·날짜 키
     const HISTORY_DB = "retireLab_history";
     const HISTORY_STORE = "snapshots";
 
     function openHistoryDB() {
       return new Promise((resolve, reject) => {
+        let settled = false;
         const req = indexedDB.open(HISTORY_DB, 1);
-        req.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains(HISTORY_STORE)) {
-            db.createObjectStore(HISTORY_STORE, { keyPath: "date" });
-          }
+        const finish = (error, db) => {
+          if (settled) { if (db) db.close(); return; }
+          settled = true; clearTimeout(timer);
+          if (error) reject(error); else { db.onversionchange = () => db.close(); resolve(db); }
         };
-        req.onsuccess = (e) => resolve(e.target.result);
-        req.onerror = (e) => reject(e.target.error);
+        const timer = setTimeout(() => finish(new Error("이력 저장소 연결 시간이 초과됐습니다. 다른 탭을 닫고 다시 시도해주세요.")), 8000);
+        req.onupgradeneeded = e => {
+          if (settled) { req.transaction.abort(); return; }
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(HISTORY_STORE)) db.createObjectStore(HISTORY_STORE, { keyPath: "date" });
+        };
+        req.onsuccess = e => finish(null, e.target.result);
+        req.onerror = e => finish(e.target.error || new Error("이력 저장소를 열지 못했습니다."));
+        req.onblocked = () => finish(new Error("다른 탭이 이력 저장소를 사용 중입니다. 다른 탭을 닫고 다시 시도해주세요."));
       });
     }
-
+    function withHistoryStore(mode, action) {
+      return openHistoryDB().then(db => new Promise((resolve, reject) => {
+        let tx, result, settled = false;
+        const finish = error => {
+          if (settled) return;
+          settled = true; db.close();
+          if (error) reject(error); else resolve(result);
+        };
+        try {
+          tx = db.transaction(HISTORY_STORE, mode);
+          tx.oncomplete = () => finish();
+          tx.onerror = () => finish(tx.error || new Error("이력 저장소 작업이 실패했습니다."));
+          tx.onabort = () => finish(tx.error || new Error("이력 저장소 작업이 취소됐습니다."));
+          action(tx.objectStore(HISTORY_STORE), value => { result = value; });
+        } catch (error) {
+          if (tx) { try { tx.abort(); } catch (_) {} }
+          finish(error);
+        }
+      }));
+    }
+    let historyWriteQueue = Promise.resolve();
+    function enqueueHistoryWrite(action) {
+      const job = historyWriteQueue.then(action);
+      // 한 번 실패한 작업이 다음 기록까지 막지 않도록 큐를 유지합니다.
+      historyWriteQueue = job.catch(() => {});
+      return job;
+    }
     function getHistoryByDate(date) {
-      return openHistoryDB().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(HISTORY_STORE, "readonly");
-        const req = tx.objectStore(HISTORY_STORE).get(date);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => reject(req.error);
+      return historyWriteQueue.then(() => withHistoryStore("readonly", (store, setResult) => {
+        const req = store.get(date); req.onsuccess = () => setResult(req.result || null);
       }));
     }
-
     function putHistory(snapshot) {
-      return openHistoryDB().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(HISTORY_STORE, "readwrite");
-        tx.objectStore(HISTORY_STORE).put(snapshot);
-        tx.oncomplete = () => resolve(true);
-        tx.onerror = () => reject(tx.error);
-      }));
+      return enqueueHistoryWrite(() => withHistoryStore("readwrite", (store, setResult) => { store.put(snapshot); setResult(true); }));
     }
-
     function getAllHistory() {
-      return openHistoryDB().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(HISTORY_STORE, "readonly");
-        const req = tx.objectStore(HISTORY_STORE).getAll();
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => reject(req.error);
+      return historyWriteQueue.then(() => withHistoryStore("readonly", (store, setResult) => {
+        const req = store.getAll(); req.onsuccess = () => setResult(req.result || []);
       }));
     }
-
-    // 여러 스냅샷을 병합 저장 (같은 date는 덮어씀 = 백업 값 우선)
     function mergeHistory(snapshots) {
-      if (!Array.isArray(snapshots) || snapshots.length === 0) return Promise.resolve(true);
-      return openHistoryDB().then(db => new Promise((resolve, reject) => {
-        const tx = db.transaction(HISTORY_STORE, "readwrite");
-        const store = tx.objectStore(HISTORY_STORE);
-        snapshots.forEach(s => { if (s && s.date) store.put(s); });
-        tx.oncomplete = () => resolve(true);
-        tx.onerror = () => reject(tx.error);
+      if (!Array.isArray(snapshots) || !snapshots.length) return Promise.resolve(true);
+      return enqueueHistoryWrite(() => withHistoryStore("readwrite", (store, setResult) => {
+        snapshots.forEach(row => { if (row && row.date) store.put(row); }); setResult(true);
       }));
     }
 
@@ -698,19 +1076,27 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return `${y}-${m}-${day}`;
     }
 
+    // @section app-state | App 상태·기본 계좌·초기화·저장 효과
     function App() {
       const [isLoaded, setIsLoaded] = useState(false);
+      const [loadError, setLoadError] = useState("");
+      const [saveError, setSaveError] = useState("");
+      const [isRestoring, setIsRestoring] = useState(false);
+      const [isSettling, setIsSettling] = useState(false);
       const [activeAccount, setActiveAccount] = useState("pension1");
       const [activeTab, setActiveTab] = useState("dashboard");
-      const [dDay, setDDay] = useState(0);
+      const [todayKey, setTodayKey] = useState(() => localDateKey());
+      const [rebalanceInfo, setRebalanceInfo] = useState({ date: "", days: 0 });
+      const dDay = rebalanceInfo.days;
       const [global, setGlobal] = useState({ userName: "김투자", incomeLevel: "5500이하" });
       const [confirmReset, setConfirmReset] = useState(false);
       const [parkingDeployRatio, setParkingDeployRatio] = useState(0); // 파킹 자산 활용 비율 상태 추가
 
       const [historyData, setHistoryData] = useState([]);
+      const [historyReadError, setHistoryReadError] = useState("");
+      const [historyWriteError, setHistoryWriteError] = useState("");
       const [historyReloadTick, setHistoryReloadTick] = useState(0);
       const [historyAccount, setHistoryAccount] = useState("total");
-      const [useDividend, setUseDividend] = useState(true);
 
       // 종목별 합산 현황 정렬 상태
       const [mergedSortKey, setMergedSortKey] = useState('value');
@@ -785,6 +1171,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         },
       });
 
+      const latestSnapshotRef = useRef(null);
+      const stateRef = useRef({ accounts, global });
+      stateRef.current = { accounts, global };
       const [msg, setMsg] = useState({ type: "", text: "" });
       const msgTimerRef = useRef(null);
       const [expandedAsset, setExpandedAsset] = useState(null);
@@ -795,7 +1184,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const [isFetchingAll, setIsFetchingAll] = useState(false);
       const [fetchingId, setFetchingId] = useState(null);
       const [fetchError, setFetchError] = useState("");
-      const currentYear = new Date().getFullYear();
+      const currentYear = Number(todayKey.slice(0, 4));
+      useEffect(() => {
+        const checkDate = () => setTodayKey(localDateKey());
+        const timer = setInterval(checkDate, 30000);
+        window.addEventListener("focus", checkDate);
+        document.addEventListener("visibilitychange", checkDate);
+        return () => { clearInterval(timer); window.removeEventListener("focus", checkDate); document.removeEventListener("visibilitychange", checkDate); };
+      }, []);
 
       useEffect(() => {
         setExpandedAsset(null);
@@ -815,34 +1211,48 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       useEffect(() => {
         try {
-          const storedAccounts = localStorage.getItem("retireLab_accounts_v3");
-          const storedGlobal = localStorage.getItem("retireLab_global_v3");
-          if (storedAccounts && storedGlobal) { 
-            const parsedAccounts = normalizeAccounts(JSON.parse(storedAccounts));
-            setAccounts(parsedAccounts); 
-            setGlobal(JSON.parse(storedGlobal)); 
+          const envelope = localStorage.getItem(STORAGE_KEY);
+          const legacyAccounts = localStorage.getItem("retireLab_accounts_v3");
+          const legacyGlobal = localStorage.getItem("retireLab_global_v3");
+          if (envelope || legacyAccounts || legacyGlobal) {
+            if (!envelope && (!legacyAccounts || !legacyGlobal)) throw new Error("저장된 계좌 또는 설정이 누락됐습니다.");
+            const raw = envelope ? JSON.parse(envelope) : { accounts: JSON.parse(legacyAccounts), global: JSON.parse(legacyGlobal) };
+            const state = validateState(raw.accounts, raw.global);
+            setAccounts(state.accounts); setGlobal(state.global);
           }
-        } catch (e) {}
-        setIsLoaded(true);
+          setIsLoaded(true);
+        } catch (error) {
+          setLoadError(`저장 데이터를 읽지 못했습니다. 원본을 보존하고 자동 저장을 중단했습니다. ${error.message}`);
+        }
       }, []);
 
       useEffect(() => {
-        if (!isLoaded) return;
-        localStorage.setItem("retireLab_accounts_v3", JSON.stringify(accounts));
-        localStorage.setItem("retireLab_global_v3", JSON.stringify(global));
-      }, [accounts, global, isLoaded]);
+        if (!isLoaded || loadError || isRestoring) return;
+        try { saveState(accounts, global); setSaveError(""); }
+        catch (error) { setSaveError("변경사항을 저장하지 못했습니다. 백업 파일을 내려받아 보관해주세요."); }
+      }, [accounts, global, isLoaded, loadError, isRestoring]);
 
       useEffect(() => { return () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }; }, []);
 
       // ── 자산 이력 로딩 (그래프용) ──
       useEffect(() => {
-        getAllHistory()
-          .then(rows => {
-            const sorted = (rows || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
-            setHistoryData(sorted);
-          })
-          .catch(err => console.error("[이력] 로딩 실패:", err));
-      }, [isLoaded, historyReloadTick]);
+        if (!isLoaded || isRestoring) return;
+        let cancelled = false;
+        getAllHistory().then(rows => {
+          if (cancelled) return;
+          setHistoryData((rows || []).slice().sort((a, b) => a.date.localeCompare(b.date)));
+          setHistoryReadError("");
+        }).catch(error => {
+          if (!cancelled) setHistoryReadError("자산 이력을 읽지 못했습니다. 기존 계좌 데이터는 유지됩니다.");
+        });
+        return () => { cancelled = true; };
+      }, [isLoaded, isRestoring, historyReloadTick]);
+      const retryHistory = () => {
+        if (!latestSnapshotRef.current) { setHistoryReloadTick(t => t + 1); return; }
+        putHistory(latestSnapshotRef.current).then(() => {
+          setHistoryWriteError(""); setHistoryReloadTick(t => t + 1);
+        }).catch(() => setHistoryWriteError("오늘 자산 이력을 저장하지 못했습니다. 브라우저 저장 공간을 확인하고 다시 시도해주세요."));
+      };
 
       const showMsg = (type, text) => {
         setMsg({ type, text });
@@ -852,17 +1262,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       const updateAcc = (fields) => setAccounts(prev => ({ ...prev, [activeAccount]: { ...prev[activeAccount], ...fields } }));
       const curAcc = accounts[activeAccount] || accounts.pension1;
-      const [rebalanceYear] = useState(currentYear);
-
       useEffect(() => {
         if (activeAccount === "report") return;
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        const lastDayOfMonth = new Date(rebalanceYear, curAcc.rebalanceMonth, 0).getDate();
-        const safeDay = Math.min(curAcc.rebalanceDay, lastDayOfMonth);
-        const target = new Date(rebalanceYear, curAcc.rebalanceMonth - 1, safeDay);
-        setDDay(Math.ceil((target - today) / 86400000));
-      }, [activeAccount, accounts, curAcc.rebalanceMonth, curAcc.rebalanceDay, rebalanceYear]);
+        setRebalanceInfo(nextRebalance(curAcc.rebalanceMonth, curAcc.rebalanceDay, new Date(), curAcc.rebalanceFrequency));
+      }, [activeAccount, curAcc.rebalanceMonth, curAcc.rebalanceDay, curAcc.rebalanceFrequency, todayKey]);
 
+      // @section account-stats | 계좌 평가액·납입원금·손익 계산
       const calcAccStats = useCallback((acc) => {
         const allocationBaseValue = getAllocationBaseValue(acc.assets);
         const parkingValue = getParkingAssetValue(acc.assets);
@@ -873,9 +1278,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         const prevDividend = acc.pastContributions.reduce((s, p) => s + (Number(p.dividend) || 0), 0);
         const activeCash = acc.contributions.filter(c => c.type !== "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const activeDividend = acc.contributions.filter(c => c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-        const currentMonthStr = `${currentYear}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-        const thisMonthDividend = acc.contributions.filter(c => String(c.month || "").slice(0, 7) === currentMonthStr && c.type === "배당").reduce((s, c) => s + (Number(c.amount) || 0), 0);
-        
+
         const employerCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "회사부담금").reduce((s, c) => s + (Number(c.amount) || 0), 0);
         const personalCash = acc.contributions.filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입").reduce((s, c) => s + (Number(c.amount) || 0), 0);
 
@@ -912,22 +1315,26 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             if (tColor) grp[cat].color = tColor;
             return grp;
           }, {});
-          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: Number(((item.totalValue / allocationBaseValue) * 100).toFixed(1)), color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
+          Object.values(grouped).forEach((item, idx) => currentHoldingsChartData.push({ name: item.name, value: (item.totalValue / allocationBaseValue) * 100, color: item.color !== '#94a3b8' ? item.color : DEFAULT_COLORS[idx % DEFAULT_COLORS.length] }));
         }
         
         return { 
-          totalCurrentValue, allocationBaseValue, parkingValue, totalBookValue, 
+          totalCurrentValue, allocationBaseValue, parkingValue, totalBookValue,
+          unknownRiskCount: acc.assets.filter(a => a.quantity > 0 && !["위험자산", "안전자산"].includes(a.assetType)).length, 
           purePrincipal, totalDividend, capitalGain, bookReturnAmt, bookReturnRate, 
           principalReturnAmt, principalReturnRate, pctP, pctD, pctG, yearCash, 
-          riskRatio, equityExposureRatio, thisMonthDividend, currentHoldingsChartData, 
+          riskRatio, equityExposureRatio, currentHoldingsChartData,
           employerCash, personalCash 
         };
-      }, [currentYear]);
+      }, [currentYear, todayKey]);
 
       const stats = activeAccount === "report" ? {} : calcAccStats(curAcc);
-      const totalInvestableCash = (Number(curAcc.monthlyInput) || 0) + (useDividend ? (stats.thisMonthDividend || 0) : 0);
+      const recordedCash = getCashValue(curAcc.assets);
+      const totalInvestableCash = curAcc.availableCash == null ? recordedCash : Math.max(0, Number(curAcc.availableCash) || 0);
+      const parkingSecuritiesValue = getParkingSecuritiesValue(curAcc.assets);
       const activeHasTarget = activeAccount !== "report" && curAcc.targetPortfolio && curAcc.targetPortfolio.length > 0 && curAcc.targetPortfolio.some(t => t.value > 0);
 
+      // @section report-stats | 통합 평가액·수익률·세액공제 계산
       const reportStats = useMemo(() => {
         const allKeys = ["pension1", "pension2", "irp", "dcIrp", "isa"];
         const statsMap = {};
@@ -956,62 +1363,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           return acc;
         }, { totalValue: 0, totalPrincipal: 0, totalDividend: 0, totalBookValue: 0, accountValues: [], accountDetail: {} });
         
-        // ── 개별 자산 합산 (종목명 기준 병합) ──
-        const assetMergeMap = {};
-        allKeys.forEach(accKey => {
-          const acc = accounts[accKey];
-          (acc.assets || []).forEach(a => {
-            const mergeKey = (a.name || "").trim();
-            if (!mergeKey) return;
-            const marketValue = (Number(a.quantity) || 0) * (Number(a.currentPrice || a.price) || 0);
-            const bookValue   = (Number(a.quantity) || 0) * (Number(a.price) || 0);
-            const qty         = Number(a.quantity) || 0;
-            if (!assetMergeMap[mergeKey]) {
-              const tColor = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
-              assetMergeMap[mergeKey] = {
-                name: a.name,
-                code: a.code || "",
-                category: a.category || "",
-                totalMarketValue: 0,
-                totalBookValue: 0,
-                totalQuantity: 0,
-                color: tColor,
-              };
-            }
-            assetMergeMap[mergeKey].totalMarketValue += marketValue;
-            assetMergeMap[mergeKey].totalBookValue   += bookValue;
-            assetMergeMap[mergeKey].totalQuantity    += qty;
-            if (!assetMergeMap[mergeKey].color) {
-              const tColor2 = ((acc.targetPortfolio || []).find(t => t.name === a.category) || {}).color || null;
-              if (tColor2) assetMergeMap[mergeKey].color = tColor2;
-            }
-          });
-        });
+        summary.totalReturnRate = cumulativeReturnRate(summary.totalValue, summary.totalPrincipal);
 
-        const totalMergedValue = Object.values(assetMergeMap)
-          .reduce((s, a) => s + a.totalMarketValue, 0);
-
-        summary.mergedAssets = Object.values(assetMergeMap)
-          .sort((a, b) => b.totalMarketValue - a.totalMarketValue)
-          .map((a, idx) => ({
-            name:             a.name,
-            code:             a.code,
-            category:         a.category,
-            totalMarketValue: a.totalMarketValue,
-            totalQuantity:    a.totalQuantity,
-            avgPrice:         a.totalQuantity > 0 ? Math.round(a.totalBookValue / a.totalQuantity) : 0,
-            returnAmt:        a.totalMarketValue - a.totalBookValue,
-            returnRate:       a.totalBookValue > 0
-                                ? ((a.totalMarketValue - a.totalBookValue) / a.totalBookValue) * 100
-                                : 0,
-            pct:              totalMergedValue > 0
-                                ? Number(((a.totalMarketValue / totalMergedValue) * 100).toFixed(1))
-                                : 0,
-            color:            a.color || DEFAULT_COLORS[idx % DEFAULT_COLORS.length],
-          }));
-
-        summary.totalMergedValue = totalMergedValue;
-        // ── 병합 끝 ──
+        // 종목코드로 합산하고 코드가 없는 직접입력 자산은 별도로 유지합니다.
+        summary.mergedAssets = mergeAccountAssets(accounts, allKeys);
+        summary.totalMergedValue = summary.mergedAssets.reduce((n, a) => n + a.totalMarketValue, 0);
 
         const dcIrpTaxCreditCash = (accounts.dcIrp && accounts.dcIrp.taxCreditEligible) ? accounts.dcIrp.contributions
           .filter(c => c.month.startsWith(String(currentYear)) && c.type === "개인추가납입")
@@ -1022,9 +1378,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         return summary;
       }, [accounts, global, currentYear, calcAccStats]);
 
+      // @section history-snapshot | 오늘 자산 이력 기록
       // ── 앱 열 때 오늘 자 자산 이력 기록 (오늘=덮어쓰기, 지난날=동결) ──
       useEffect(() => {
-        if (!isLoaded) return;
+        if (!isLoaded || isRestoring || loadError) return;
         if (!reportStats || typeof reportStats.totalValue !== "number") return;
         if (reportStats.totalValue <= 0) return; // 데이터 로드 전 0값 방지
 
@@ -1062,196 +1419,16 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           updatedAt: Date.now(),
         };
 
+        latestSnapshotRef.current = snapshot;
         // 오늘 날짜는 항상 덮어씀. (지난 날짜는 이 로직이 건드리지 않음 — 키가 today이므로)
         putHistory(snapshot)
-          .then(() => setHistoryReloadTick(t => t + 1))
-          .catch(err => console.error("[이력] 저장 실패:", err));
-      }, [isLoaded, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
+          .then(() => { setHistoryWriteError(""); setHistoryReloadTick(t => t + 1); })
+          .catch(() => setHistoryWriteError("오늘 자산 이력을 저장하지 못했습니다. 브라우저 저장 공간을 확인하고 다시 시도해주세요."));
+      }, [isLoaded, isRestoring, loadError, todayKey, reportStats.totalValue, reportStats.totalPrincipal, reportStats.totalDividend, reportStats.accountDetail]);
 
 
-      const buyLogic = useMemo(() => {
-        const targetSum = activeAccount !== "report" ? curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) : 0;
-        const invalidTarget = activeAccount !== "report" && targetSum !== 100;
-
-        if (!activeHasTarget || invalidTarget) return { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: totalInvestableCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: totalInvestableCash };
-
-        // 1. 기준 금액 분리 계산
-        const allocationBaseValue = stats.allocationBaseValue || 0;
-        const parkingValue = stats.parkingValue || 0;
-        
-        // 2. 매수 재원에 파킹 자산 포함 (사용자 설정 비율)
-        const deployParkingCash = Math.floor(parkingValue * (parkingDeployRatio / 100));
-        const deployCash = totalInvestableCash + deployParkingCash;
-        
-        // 리밸런싱 타겟: 투자자산 + 파킹매도분
-        const rebalanceTargetValue = allocationBaseValue + deployParkingCash;
-        // Buy-only 타겟: 투자자산 + 현금투입액 + 파킹매도분
-        const targetBaseAfterBuy = allocationBaseValue + deployCash;
-
-        // 4. 파킹용 현금/단기채 목표 비중 제외
-        const activeTargetPortfolio = curAcc.targetPortfolio.filter(t => {
-          // 파킹 자산만 있는 "현금/단기채" 항목만 목표비중에서 제외
-          // 다른 자산군은 파킹 여부와 무관하게 목표비중 유지
-          if (t.name === "현금/단기채") {
-            return curAcc.assets.some(a => !a.parkingAsset && a.category === t.name);
-          }
-          return true;
-        });
-
-        // 4-1. 파킹 제외 후 목표 비중 합계가 100이 안 될 수 있으므로 정규화
-        const activeTargetSum = activeTargetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0);
-        const normalizedTargetPortfolio = activeTargetPortfolio.map(t => ({
-          ...t,
-          normalizedValue: activeTargetSum > 0 ? Number(((t.value / activeTargetSum) * 100).toFixed(1)) : t.value
-        }));
-
-        // 현재 투자 포트폴리오 비중
-        const currentPortfolio = normalizedTargetPortfolio.map(t => {
-          const cv = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name).reduce((s, a) => s + getAssetMarketValue(a), 0);
-          const w = allocationBaseValue > 0 ? (cv / allocationBaseValue) * 100 : 0;
-          return { ...t, value: Number(w.toFixed(1)), categoryValue: cv, targetWeight: t.normalizedValue };
-        });
-        
-        // 일반 리밸런싱 플랜
-        const normalRebalancePlan = currentPortfolio.map(p => {
-          const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === p.name);
-          const cp = pa ? (pa.currentPrice || pa.price) : 0;
-          const ap = pa ? pa.price : 0;
-          const diff = rebalanceTargetValue * (p.targetWeight / 100) - p.categoryValue;
-          const shares = cp > 0 ? Math.round(diff / cp) : 0;
-          const profit = shares < 0 ? Math.abs(shares) * (cp - ap) : 0;
-          return { name: p.name, assetName: pa ? pa.name : p.name, currentWeight: p.value, targetWeight: p.targetWeight, shares, currentPrice: cp, profit, isParkingLiquidation: false };
-        }).filter(x => x.shares !== 0).sort((a, b) => a.shares - b.shares);
-
-        // 3. 파킹 자산 매도 주문 생성
-        const generatedParkingSellOrders = [];
-        let remainToSell = deployParkingCash;
-        if (remainToSell > 0) {
-          const parkingAssets = curAcc.assets.filter(a => a.parkingAsset);
-          for (const p of parkingAssets) {
-            if (remainToSell <= 0) break;
-            const cp = p.currentPrice || p.price || 0;
-            if (cp <= 0) continue;
-            
-            const sellShares = Math.min(p.quantity, Math.ceil(remainToSell / cp));
-            if (sellShares > 0) {
-              const sellAmt = sellShares * cp;
-              generatedParkingSellOrders.push({
-                name: p.category || "파킹자산",
-                assetName: p.name,
-                shares: -sellShares,
-                currentPrice: cp,
-                currentWeight: 0,
-                targetWeight: 0,
-                profit: 0,
-                isParkingLiquidation: true
-              });
-              remainToSell -= sellAmt;
-            }
-          }
-        }
-
-        // 전체 리밸런싱 플랜 병합 (파킹 매도가 맨 위로 오도록)
-        const fullRebalancePlan = [
-          ...generatedParkingSellOrders,
-          ...normalRebalancePlan
-        ];
-        
-        const totalSellAmt = fullRebalancePlan.filter(x => x.shares < 0).reduce((s, x) => s + Math.abs(x.shares * x.currentPrice), 0);
-        const fee = totalSellAmt * 0.002;
-        
-        // Buy-only 로직 — 부족률 비례 분할매수 (상위 3개 자산 캡)
-        // 규칙: 부족 금액 상위 3개 자산에만 배분, 각 자산 배분 한도 = deployCash * (부족금액 / 상위3개 부족금액 합계)
-        const orders = [];
-
-        // 1. 부족 자산 목록 — 부족 금액 내림차순 정렬
-        const deficitItems = currentPortfolio
-          .map(item => {
-            const pa = curAcc.assets.find(a => !a.parkingAsset && a.category === item.name);
-            const cp = pa ? (pa.currentPrice || pa.price) : 0;
-            const deficit = (targetBaseAfterBuy * (item.targetWeight / 100)) - item.categoryValue;
-            return { name: item.name, assetName: pa ? pa.name : item.name, cp, deficit };
-          })
-          .filter(x => x.deficit > 0 && x.cp > 0)
-          .sort((a, b) => b.deficit - a.deficit);
-
-        // 2. 상위 3개만 선택
-        const TOP_N = 3;
-        const topItems = deficitItems.slice(0, TOP_N);
-        const totalDeficit = topItems.reduce((s, x) => s + x.deficit, 0);
-
-        // 3. 각 자산에 비례 배분 한도 계산 후 매수
-        let cash = deployCash;
-        topItems.forEach(item => {
-          if (cash <= 0 || item.cp <= 0) return;
-          // 이 자산에 배분할 금액 (비례 + 잔여 현금 범위 내)
-          const allocRatio = totalDeficit > 0 ? item.deficit / totalDeficit : 1 / topItems.length;
-          const allocBudget = Math.min(deployCash * allocRatio, cash, item.deficit);
-          const n = Math.floor(allocBudget / item.cp);
-          if (n > 0) {
-            const cost = n * item.cp;
-            orders.push({ name: item.name, assetName: item.assetName, shares: n, cost, deficit: item.deficit });
-            cash -= cost;
-          }
-        });
-
-        // 4. 잔여 현금 — 상위 3개 중 아직 부족한 자산에 1주씩 추가 (잔돈 소진)
-        let keepBuying = true;
-        while (keepBuying && cash > 0) {
-          keepBuying = false;
-          const candidates = topItems
-            .map(item => {
-              const order = orders.find(o => o.name === item.name);
-              const orderCost = order ? order.cost : 0;
-              const remaining = item.deficit - orderCost;
-              return { ...item, remaining };
-            })
-            .filter(x => x.remaining > 0 && cash >= x.cp)
-            .sort((a, b) => b.remaining - a.remaining);
-
-          if (candidates.length > 0) {
-            const target = candidates[0];
-            const orderIndex = orders.findIndex(o => o.name === target.name);
-            if (orderIndex >= 0) {
-              orders[orderIndex] = {
-                ...orders[orderIndex],
-                shares: orders[orderIndex].shares + 1,
-                cost: orders[orderIndex].cost + target.cp,
-                deficit: Math.max(0, orders[orderIndex].deficit - target.cp)
-              };
-            } else {
-              orders.push({ name: target.name, assetName: target.assetName, shares: 1, cost: target.cp, deficit: Math.max(0, target.deficit - target.cp) });
-            }
-            cash -= target.cp;
-            keepBuying = true;
-          }
-        }
-
-        const tempDeviation = currentPortfolio.map(p => {
-          const gap = p.value - p.targetWeight;
-          const deficitAmount = (allocationBaseValue * (p.targetWeight / 100)) - p.categoryValue;
-          const matchedAssets = curAcc.assets.filter(a => !a.parkingAsset && a.category === p.name);
-          let assetName = "";
-          if (matchedAssets.length === 1) {
-            assetName = matchedAssets[0].name || "";
-          } else if (matchedAssets.length >= 2) {
-            assetName = `${matchedAssets[0].name || "종목"} 외 ${matchedAssets.length - 1}개`;
-          }
-          return { name: p.name, assetName, targetWeight: p.targetWeight, currentWeight: p.value, gap, deficitAmount, color: p.color };
-        });
-
-        tempDeviation.sort((a, b) => b.deficitAmount - a.deficitAmount);
-
-        let priorityCounter = 1;
-        const deviationData = tempDeviation.map(d => {
-          let priority = null;
-          if (d.deficitAmount > 0) priority = priorityCounter++;
-          return { ...d, priority };
-        });
-
-        // buyLogic 반환 객체에 deployParkingCash 및 deployCash 추가 전달
-        return { currentPortfolio, fullRebalancePlan, buyOrders: orders, remainingCash: cash, totalProfit: normalRebalancePlan.reduce((s, x) => s + Math.max(0, x.profit), 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash };
-      }, [activeHasTarget, curAcc, stats.allocationBaseValue, stats.parkingValue, totalInvestableCash, activeAccount, parkingDeployRatio, useDividend]);
+      // @section sorting | 주문계획 연결·종목 정렬·드래그
+      const buyLogic = useMemo(() => activeAccount === "report" ? {} : calculateBuyPlan(curAcc, totalInvestableCash, parkingDeployRatio), [curAcc, totalInvestableCash, activeAccount, parkingDeployRatio]);
 
       // 종목별 합산 현황 표시용 정렬 결과
       const sortedMergedAssets = useMemo(() => {
@@ -1264,8 +1441,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           mergedCustomOrder.forEach((name, idx) => { orderMap[name] = idx; });
           // 커스텀 순서에 없는 새 항목은 맨 뒤로
           return [...list].sort((a, b) => {
-            const ai = orderMap[a.name] ?? 9999;
-            const bi = orderMap[b.name] ?? 9999;
+            const ai = orderMap[a.mergeKey] ?? 9999;
+            const bi = orderMap[b.mergeKey] ?? 9999;
             return ai - bi;
           });
         }
@@ -1287,7 +1464,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
       // 직접정렬 모드 진입 — 현재 표시 순서를 초기 커스텀 순서로 설정
       const handleEnterCustomSort = () => {
-        setMergedCustomOrder(sortedMergedAssets.map(a => a.name));
+        setMergedCustomOrder(sortedMergedAssets.map(a => a.mergeKey));
         setMergedSortKey('custom');
       };
 
@@ -1365,7 +1542,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         return () => el.removeEventListener('touchmove', onTouchMove);
       }, [mergedSortKey]);
 
-      const chAsset = (id, f, v) => updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v } : a) });
+      // @section asset-edit | 자산·납입내역 편집
+      const chAsset = (id, f, v) => {
+        const key = `${activeAccount}:${id}`;
+        quoteVersions.current.set(key, (quoteVersions.current.get(key) || 0) + 1);
+        if (["quantity", "price", "currentPrice"].includes(f)) v = Math.max(0, Number(v) || 0);
+        if (f === "quantity") v = Math.floor(v);
+        updateAcc({ assets: curAcc.assets.map(a => a.id === id ? { ...a, [f]: v, ...(f === "code" ? { priceUpdatedAt: null, priceSource: null, priceFetchFailedAt: null } : f === "currentPrice" ? { priceUpdatedAt: null, priceSource: "manual", priceFetchFailedAt: null } : {}) } : a) });
+      };
       const chContrib = (id, f, v) => updateAcc({ contributions: curAcc.contributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
       const chPast = (id, f, v) => updateAcc({ pastContributions: curAcc.pastContributions.map(c => c.id === id ? { ...c, [f]: v } : c) });
 
@@ -1378,227 +1562,156 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         updateAcc({ assets: newAssets });
       };
 
+      // @section price-fetch | 가격 조회·동시성·갱신
       const GAS_PRICE_PROXY = "https://script.google.com/macros/s/AKfycbzijpg_P0TzHc418PyTwfyny64E5cerg510hn3_WraR6kJ3gnzgh7sd8zITnZ9brN_4Jg/exec";
 
-      const fetchStock = async (code) => {
-        // 1순위: 구글 Apps Script 프록시 (구글 서버가 네이버를 직접 조회 → 빠르고 안정적)
+      const fetchJsonWithTimeout = async url => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        try { const res = await fetch(url, { signal: controller.signal }); if (!res.ok) throw new Error(`HTTP ${res.status}`); return await res.json(); }
+        finally { clearTimeout(timer); }
+      };
+      const parseQuote = (price, name) => {
+        const num = Number(String(price ?? "").replace(/,/g, ""));
+        return Number.isFinite(num) && num > 0 ? { price: num, name: typeof name === "string" ? name : "" } : null;
+      };
+      const fetchStock = async code => {
+        const cleaned = String(code).trim().toUpperCase();
+        if (!/^[0-9A-Z]{6}$/.test(cleaned)) return null;
         try {
-          const gasRes = await fetch(`${GAS_PRICE_PROXY}?code=${encodeURIComponent(code)}`);
-          if (gasRes.ok) {
-            const g = await gasRes.json();
-            if (g && g.ok && (g.price || g.name)) {
-              return { price: g.price != null ? Number(g.price) : null, name: g.name || "" };
-            }
-          }
-        } catch (e) {}
-
-        // 2순위(fallback): 기존 공용 프록시 (구글 프록시가 실패했을 때만)
-        const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
+          const g = await fetchJsonWithTimeout(`${GAS_PRICE_PROXY}?code=${encodeURIComponent(cleaned)}`);
+          const quote = g?.ok ? parseQuote(g.price, g.name) : null;
+          if (quote) return quote;
+        } catch (error) { /* 다음 조회 경로 사용 */ }
+        const url = `https://m.stock.naver.com/api/stock/${cleaned}/basic`;
         for (const proxy of [`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`]) {
           try {
-            const res = await fetch(proxy); if (!res.ok) continue; const d = await res.json();
+            const d = await fetchJsonWithTimeout(proxy);
             const actual = proxy.includes("allorigins") && d.contents ? JSON.parse(d.contents) : d;
-            const priceStr = actual.closePrice || (actual.result && actual.result.closePrice);
-            const nameStr = actual.stockName || (actual.result && actual.result.stockName);
-            if (priceStr || nameStr) return { price: priceStr ? Number(priceStr.replace(/,/g, "")) : null, name: nameStr || "" };
-          } catch (e) {}
+            const quote = parseQuote(actual.closePrice || actual.result?.closePrice, actual.stockName || actual.result?.stockName);
+            if (quote) return quote;
+          } catch (error) { /* 이전 가격 보존 */ }
         }
         return null;
       };
-
+      const quoteVersions = useRef(new Map());
+      const priceBusy = useRef(false);
+      const requestQuote = async (accKey, asset) => {
+        const key = `${accKey}:${asset.id}`;
+        const version = (quoteVersions.current.get(key) || 0) + 1;
+        quoteVersions.current.set(key, version);
+        const result = await fetchStock(asset.code);
+        return { ...(result || {}), failed: !result, id: asset.id, code: asset.code, version, key, priceUpdatedAt: new Date().toISOString() };
+      };
+      const applyQuotes = (accKey, updates) => setAccounts(prev => {
+        if (!prev[accKey]) return prev;
+        return { ...prev, [accKey]: { ...prev[accKey], assets: prev[accKey].assets.map(a => {
+          const quote = updates.find(u => u && u.id === a.id && String(u.code).trim().toUpperCase() === String(a.code).trim().toUpperCase() && quoteVersions.current.get(u.key) === u.version);
+          if (!quote) return a;
+          if (quote.failed) return { ...a, priceFetchFailedAt: quote.priceUpdatedAt };
+          return { ...a, name: quote.name || a.name, currentPrice: quote.price, priceUpdatedAt: quote.priceUpdatedAt, priceSource: "quote", priceFetchFailedAt: null };
+        }) } };
+      });
       const onCodeBlur = async (id, code) => {
-        if (!code || code.trim().length < 5) return;
-        const accountAtStart = activeAccount;
-        
-        setFetchingId(id); 
-        const d = await fetchStock(code.trim());
-        
-        if (accountAtStart !== activeAccount) {
-          setFetchingId(null);
-          return;
-        }
-
-        if (d) {
-          setAccounts(prev => ({ 
-            ...prev, 
-            [accountAtStart]: { 
-              ...prev[accountAtStart], 
-              assets: prev[accountAtStart].assets.map(a => a.id === id ? { ...a, name: d.name || a.name, currentPrice: d.price || a.currentPrice } : a) 
-            } 
-          }));
-          showMsg("success", `"${d.name || code}" 현재가를 불러왔습니다.`);
-        } else {
-          showMsg("error", `종목코드 ${code.trim()} 조회에 실패했습니다.`);
-        }
-        
-        setFetchingId(null);
+        if (!/^[0-9A-Za-z]{6}$/.test(String(code).trim())) return;
+        const key = activeAccount;
+        setFetchingId(id);
+        try {
+          const result = await requestQuote(key, { id, code });
+          if (result && !result.failed) { applyQuotes(key, [result]); showMsg("success", "현재가 조회가 완료됐습니다."); }
+          else { applyQuotes(key, [result]); showMsg("error", "현재가 조회에 실패했습니다. 이전 가격을 유지합니다."); }
+        } finally { setFetchingId(null); }
       };
-
-      const fetchAllPrices = async () => {
-  if (isFetching) return;
-
-  setIsFetching(true); setFetchError("");
-  const currentAccount = activeAccount;
-  const currentAssets = accounts[currentAccount].assets;
-  const failedNames = [];
-
-  const codedAssets = currentAssets.filter(a => a.code && a.code.length >= 5);
-  const updates = await fetchWithConcurrency(codedAssets, async a => {
-    const d = await fetchStock(a.code);
-    if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
-    failedNames.push(a.name || a.code);
-    return null;
-  }, 6, 100);
-
-  setAccounts(prev => {
-    if (!prev[currentAccount]) return prev;
-    return {
-      ...prev,
-      [currentAccount]: {
-        ...prev[currentAccount],
-        assets: prev[currentAccount].assets.map(prevAsset => {
-          const update = updates.find(u => u && u.id === prevAsset.id);
-          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-        })
-      }
-    };
-  });
-
-  setIsFetching(false);
-  if (failedNames.length > 0) {
-    setFetchError(`조회 실패: ${formatFailedNames(failedNames)}`);
-    setTimeout(() => setFetchError(""), 5000);
-  }
-};
-      const fetchAllAccountsPrices = async () => {
-  if (isFetchingAll) return;
-
-  setIsFetchingAll(true);
-  const accountUpdates = {};
-  const failedNames = [];
-
-  for (const accKey of Object.keys(accounts)) {
-    if (accKey === "report") continue;
-    const acc = accounts[accKey];
-    const accLabel = acc.label.split(" ")[0];
-    const codedAssets = acc.assets.filter(a => a.code && a.code.length >= 5);
-    const updates = await fetchWithConcurrency(codedAssets, async a => {
-      const d = await fetchStock(a.code);
-      if (d) return { id: a.id, currentPrice: d.price || a.currentPrice, name: d.name || a.name };
-      failedNames.push(`[${accLabel}] ${a.name || a.code}`);
-      return null;
-    }, 6, 100);
-    accountUpdates[accKey] = updates;
-  }
-
-  setAccounts(prev => {
-    const nextAccounts = { ...prev };
-    for (const accKey of Object.keys(accountUpdates)) {
-      if (!nextAccounts[accKey]) continue;
-      const updates = accountUpdates[accKey];
-      nextAccounts[accKey] = {
-        ...nextAccounts[accKey],
-        assets: nextAccounts[accKey].assets.map(prevAsset => {
-          const update = updates.find(u => u && u.id === prevAsset.id);
-          return update ? { ...prevAsset, currentPrice: update.currentPrice, name: update.name } : prevAsset;
-        })
-      }
-    }
-    return nextAccounts;
-  });
-
-  setIsFetchingAll(false);
-  if (failedNames.length > 0) showMsg("error", `조회 실패: ${formatFailedNames(failedNames)}`);
-  else showMsg("success", "모든 계좌의 현재가가 성공적으로 갱신되었습니다.");
-};
-
-      const exportData = async () => {
-        let history = [];
-        try { history = await getAllHistory(); } catch (err) { console.error("[백업] 이력 읽기 실패:", err); }
-        const payload = {
-          schemaVersion: "1.2",
-          exportedAt: new Date().toISOString(),
-          accounts,
-          global,
-          history
-        };
-        const a = document.createElement("a");
-        a.href = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
-        a.download = `절세3총사_백업_${new Date().toISOString().slice(0, 10)}.json`; a.click();
-      };
-
-      const importData = (e) => {
-        const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-        r.onload = (ev) => {
-          try { 
-            const d = JSON.parse(ev.target.result); 
-            if (d.accounts && typeof d.accounts === 'object' && d.global && typeof d.global === 'object' && d.schemaVersion) { 
-              const normalizedAccounts = normalizeAccounts(d.accounts);
-              setAccounts(normalizedAccounts); 
-              setGlobal(d.global); 
-              // 이력 병합 복구 (있을 때만 — 구버전 백업 파일은 history 없음)
-              if (Array.isArray(d.history) && d.history.length > 0) {
-                mergeHistory(d.history)
-                  .then(() => showMsg("success", `통합 데이터 복구 완료! (이력 ${d.history.length}일치 병합)`))
-                  .catch(err => { console.error("[복구] 이력 병합 실패:", err); showMsg("success", "통합 데이터 복구 완료! (이력 병합 실패)"); });
-              } else {
-                showMsg("success", "통합 데이터 복구 완료!"); 
-              }
-            } else {
-              throw new Error("Invalid Schema");
-            }
-          } catch { 
-            showMsg("error", "올바른 구조의 백업 파일이 아닙니다."); 
+      const refreshPrices = async allAccounts => {
+        if (priceBusy.current) return;
+        priceBusy.current = true;
+        const keys = allAccounts ? Object.keys(accounts) : [activeAccount];
+        const capturedAccounts = accounts;
+        const failed = [];
+        allAccounts ? setIsFetchingAll(true) : setIsFetching(true);
+        setFetchError("");
+        try {
+          for (const key of keys) {
+            const assets = capturedAccounts[key]?.assets || [];
+            const coded = assets.filter(a => a.code && String(a.code).trim().length > 0);
+            const updates = await fetchWithConcurrency(coded, async a => {
+              const result = await requestQuote(key, a);
+              if (!result || result.failed) failed.push(a.name || a.code);
+              return result;
+            }, 6, 100);
+            applyQuotes(key, updates);
           }
-        };
-        r.readAsText(file); e.target.value = "";
+          if (failed.length) { setFetchError(`조회 실패: ${formatFailedNames(failed)}`); showMsg("error", `조회 실패: ${formatFailedNames(failed)}. 이전 가격을 유지합니다.`); }
+          else showMsg("success", "현재가 조회가 완료됐습니다.");
+        } catch (error) { showMsg("error", "현재가 갱신을 중단했습니다. 다시 시도해주세요."); }
+        finally { priceBusy.current = false; setIsFetching(false); setIsFetchingAll(false); }
+      };
+      const fetchAllPrices = () => refreshPrices(false);
+      const fetchAllAccountsPrices = () => refreshPrices(true);
+
+      // @section backup-restore | JSON 백업·복원·연도마감
+      const exportData = async () => {
+        const history = await getAllHistory();
+        downloadJson({ schemaVersion: "1.2", exportedAt: new Date().toISOString(), accounts, global, history }, `절세3총사_백업_${localDateKey()}.json`);
+      };
+      const onExport = async () => {
+        try { await exportData(); showMsg("success", "백업 파일 다운로드를 요청했습니다."); }
+        catch (error) { showMsg("error", "이력을 읽지 못해 전체 백업을 중단했습니다. 다시 시도해주세요."); }
+      };
+      const exportRawStorage = () => {
+        try { downloadJson({ savedState: localStorage.getItem(STORAGE_KEY), accountsV3: localStorage.getItem("retireLab_accounts_v3"), globalV3: localStorage.getItem("retireLab_global_v3") }, `절세3총사_원본저장데이터_${localDateKey()}.json`); }
+        catch (error) { setLoadError("저장소에 접근할 수 없습니다. 브라우저 저장소 설정을 확인해주세요."); }
+      };
+      const importData = async (e) => {
+        const file = e.target.files[0]; e.target.value = "";
+        if (!file || isRestoring) return;
+        setIsRestoring(true);
+        try {
+          if (file.size > 20 * 1024 * 1024) throw new Error("백업 파일은 20MB 이하만 지원합니다.");
+          const restored = validateBackup(JSON.parse(await file.text()));
+          if (loadError) exportRawStorage(); else await exportData();
+          // 기록 전 실패하면 기존 계좌 상태를 바꾸지 않습니다.
+          saveState(restored.accounts, restored.global);
+          quoteVersions.current.forEach((v, key) => quoteVersions.current.set(key, v + 1));
+          setAccounts(restored.accounts); setGlobal(restored.global);
+          setLoadError(""); setSaveError(""); setIsLoaded(true);
+          try {
+            await mergeHistory(restored.history);
+            setHistoryReloadTick(t => t + 1);
+            showMsg("success", `계좌 복구 완료! 이력 ${restored.history.length}일치 병합`);
+          } catch (error) { showMsg("error", "계좌는 복구됐지만 이력 복구에 실패했습니다. 백업 파일을 보관하고 다시 시도해주세요."); }
+        } catch (error) {
+          const message = `복원을 중단했습니다. ${error.message}`;
+          if (loadError) setLoadError(message); else showMsg("error", message);
+        } finally { setIsRestoring(false); }
+      };
+      const doSettle = async () => {
+        if (isSettling) return;
+        setIsSettling(true);
+        try {
+          const key = activeAccount;
+          const next = settleAccount(curAcc, currentYear);
+          await exportData();
+          if (stateRef.current.accounts !== accounts || stateRef.current.global !== global) throw new Error("백업 중 데이터가 변경됐습니다. 다시 시도해주세요.");
+          const nextAccounts = { ...accounts, [key]: next };
+          saveState(nextAccounts, global);
+          setAccounts(nextAccounts);
+          showMsg("success", "원금·배당 합계를 유지하며 과거 연도를 마감했습니다.");
+        } catch (error) { showMsg("error", `마감을 중단했습니다. ${error.message}`); }
+        finally { setIsSettling(false); }
       };
 
-      const doSettle = () => {
-        const toSettle = curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) < currentYear);
-        
-        if (toSettle.length === 0) {
-          showMsg("error", "마감할 과거 연도 데이터가 없습니다.");
-          return;
-        }
-
-        const unSettled = toSettle.filter(c => {
-          const y = parseInt(c.month.split("-")[0], 10);
-          return !curAcc.pastContributions.some(p => p.year === y);
-        });
-
-        if (unSettled.length === 0) {
-          showMsg("error", "이미 모든 과거 연도 데이터가 마감되었습니다.");
-          return;
-        }
-
-        const yearsProcessed = new Set();
-        exportData();
-
-        const sums = {};
-        const PRINCIPAL_TYPES = ["입금", "개인추가납입", "회사부담금"];
-        unSettled.forEach(c => {
-          const y = parseInt(c.month.split("-")[0], 10); 
-          yearsProcessed.add(y);
-          if (!sums[y]) sums[y] = { amount: 0, dividend: 0 };
-          if (PRINCIPAL_TYPES.includes(c.type)) sums[y].amount += Number(c.amount || 0); 
-          else if (c.type === "배당") sums[y].dividend += Number(c.amount || 0);
-        });
-
-        let np = curAcc.pastContributions.map(p => ({ ...p }));
-        Object.entries(sums).forEach(([y, v]) => {
-          const yn = parseInt(y, 10); 
-          np.push({ id: Date.now() + Math.random(), year: yn, ...v }); 
-        });
-
-        updateAcc({ 
-          pastContributions: np, 
-          contributions: curAcc.contributions.filter(c => parseInt(c.month.split("-")[0], 10) >= currentYear) 
-        });
-        
-        showMsg("success", `총 ${yearsProcessed.size}개 연도 데이터가 성공적으로 이월되었습니다.`);
-      };
-
+      // @section app-shell | 복구 화면·탭·공통 화면 구성
+      if (loadError) return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+          <div className="max-w-md bg-white p-6 rounded-2xl border border-rose-200 space-y-4">
+            <h1 className="font-black text-rose-700">데이터 복구가 필요합니다</h1>
+            <p className="text-sm text-slate-700">{loadError}</p>
+            <button onClick={exportRawStorage} className="w-full py-3 bg-slate-900 text-white rounded-xl">원본 저장 데이터 내려받기</button>
+            <label className="block text-center py-3 bg-indigo-50 rounded-xl text-indigo-700">{isRestoring ? "복원 중…" : "정상 백업 파일로 복원"}<input disabled={isRestoring} type="file" accept=".json" onChange={importData} className="hidden" /></label>
+          </div>
+        </div>
+      );
       if (!isLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold">로딩 중...</div>;
 
       const cardBase = "bg-white rounded-2xl border border-slate-200 shadow-sm";
@@ -1649,8 +1762,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </header>
           )}
 
+          {historyWriteError && activeAccount !== "report" && <div className="mx-4 my-3 p-3 bg-amber-50 text-amber-800 rounded-xl text-xs">{historyWriteError}<button onClick={retryHistory} className="ml-2 underline font-bold">다시 시도</button></div>}
+          {saveError && <div className="mx-4 my-3 p-4 bg-rose-50 text-rose-700 rounded-xl text-sm">{saveError}<button onClick={onExport} className="ml-2 underline font-bold">백업</button></div>}
+          {(isRestoring || isSettling) && <div className="fixed inset-0 z-[100] bg-slate-900/40 flex items-center justify-center"><p className="bg-white p-6 rounded-2xl font-bold">{isRestoring ? "복원 중…" : "연도 마감 중…"}</p></div>}
           <main className="max-w-4xl mx-auto px-4 mt-4 space-y-6">
 
+            {/* @section report-ui | 통합 리포트 화면 */}
             {/* 통합 리포트 */}
             {activeAccount === "report" && (
               <div className="space-y-4 pt-4">
@@ -1660,6 +1777,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     {msg.text}
                   </div>
                 )}
+                <p className="text-[10px] text-slate-400 text-right px-1" aria-label={`앱 버전 ${APP_VERSION}`}>앱 v{APP_VERSION}</p>
                 <div className={`${cardBase} p-6 relative overflow-hidden`}>
                   <div className="flex justify-between items-center mb-4 relative z-10">
                     <div className="flex items-center gap-2">
@@ -1686,6 +1804,22 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         {fmt(reportStats.totalValue - reportStats.totalPrincipal)}원
                       </p>
                     </div>
+                    <div className="col-span-2 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                        총 누적 수익률
+                      </span>
+                      <span className={`text-xl font-black ${reportStats.totalReturnRate > 0 ? 'text-rose-500' : reportStats.totalReturnRate < 0 ? 'text-blue-500' : 'text-slate-700'}`}>
+                        {formatReturnRate(reportStats.totalReturnRate)}
+                      </span>
+                    </div>
+                    <details className="col-span-2 text-[11px] text-slate-500 leading-relaxed">
+                      <summary className="cursor-pointer font-bold">수익률 계산 기준</summary>
+                      <div className="mt-2 rounded-xl bg-slate-50 p-3 space-y-1">
+                        <p>총 누적 손익 ÷ 총 납입 원금 × 100</p>
+                        <p>납입 원금 대비 단순 누적 수익률이며, 연환산 수익률은 아닙니다.</p>
+                        <p>자산에 반영된 배당은 중복으로 더하지 않습니다. 원금이 없으면 —로 표시합니다.</p>
+                      </div>
+                    </details>
                   </div>
                 </div>
                 <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
@@ -1716,11 +1850,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       </button>
                     ))}
                   </div>
+                  {(historyReadError || historyWriteError) && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-xs"><p>{historyReadError}</p><p>{historyWriteError}</p><button onClick={retryHistory} className="mt-2 underline font-bold">다시 시도</button></div>}
                   <HistoryChart history={historyData} accountKey={historyAccount} />
                 </div>
 
                 <DonutChart title="계좌별 자산 비중" subtitle="포트폴리오 내 자금 분산도" centerLabel="통합"
-                  data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? Number(((v.value / reportStats.totalValue) * 100).toFixed(1)) : 0 }))} />
+                  data={reportStats.accountValues.map(v => ({ ...v, value: reportStats.totalValue > 0 ? (v.value / reportStats.totalValue) * 100 : 0 }))} />
                   
                 {/* 개별 자산 합산 비중 섹션 */}
                 {reportStats.mergedAssets && reportStats.mergedAssets.length > 0 && (
@@ -1818,7 +1953,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                           const isDropTarget = mergedSortKey === 'custom' && dragOverIdx === idx && draggedIdx !== idx;
 
                           return (
-                            <div key={a.name}
+                            <div key={a.mergeKey}
                               data-merged-drag-idx={idx}
                               draggable={mergedSortKey === 'custom'}
                               onDragStart={() => handleDragStart(idx)}
@@ -1854,10 +1989,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   <p className="text-xs font-bold text-slate-800 truncate leading-tight"
                                     style={{ maxWidth: "160px" }}>
                                     {a.name}
-                                  </p>
+                                  </p><p className="text-[9px] text-slate-400">{a.code || (a.isCash ? "예수금 합산" : "직접 입력 자산")}{a.priceMismatch ? " · 계좌별 입력가격 다름" : ""}</p>
                                   <p className="text-[10px] text-slate-400 leading-tight">
-                                    {a.totalQuantity.toLocaleString("ko-KR")}주 ·
-                                    평단 ₩{a.avgPrice.toLocaleString("ko-KR")}
+                                    {a.isCash ? "계좌별 현금잔액 합계" : <>{a.totalQuantity.toLocaleString("ko-KR")}주 · 평단 ₩{a.avgPrice.toLocaleString("ko-KR")}</>}
                                   </p>
                                 </div>
                               </div>
@@ -1891,14 +2025,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 {/* 데이터 관리 (통합) */}
                 <div className={`${cardBase} p-6 space-y-3`}>
                   <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><Archive size={16} /> 데이터 관리</p>
-                  <button onClick={exportData} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
+                  <button onClick={onExport} className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 active:scale-95 transition-all"><Download size={16} /> 전체 계좌 백업 (.json)</button>
                   <label className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center gap-2 text-sm font-bold text-slate-400 cursor-pointer active:scale-95 transition-all">
                     <Upload size={16} /> 백업 파일 불러오기 <input type="file" accept=".json" onChange={importData} className="hidden" />
                   </label>
                   <div className="pt-4 mt-2 border-t border-slate-100">
                     {confirmReset ? (
                       <div className="flex gap-2">
-                        <button onClick={() => { localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }}
+                        <button onClick={() => { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem("retireLab_accounts_v3"); localStorage.removeItem("retireLab_global_v3"); window.location.reload(); }}
                           className="flex-1 py-3 bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md active:scale-95 transition-all">예, 초기화합니다</button>
                         <button onClick={() => setConfirmReset(false)}
                           className="flex-1 py-3 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl active:scale-95 transition-all">취소</button>
@@ -1912,6 +2046,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section dashboard-ui | 계좌 대시보드·리밸런싱 요약 */}
             {/* 대시보드 */}
             {activeAccount !== "report" && activeTab === "dashboard" && (
               <div className="-mt-20 relative z-10 space-y-4">
@@ -1969,7 +2104,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <div className="mt-4">
                       <div className="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
                         <span>올해 납입 ₩{fmt(stats.yearCash)}</span>
-                        <span>{curAcc.limit > 0 ? ((stats.yearCash / curAcc.limit) * 100).toFixed(1) : "0.0"}%</span>
+                        <span>{curAcc.limit > 0 ? ((stats.yearCash / curAcc.limit) * 100).toFixed(2) : "0.00"}%</span>
                       </div>
                       <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                         <div className="h-full transition-all" style={{ width: `${Math.min(100, curAcc.limit > 0 ? (stats.yearCash / curAcc.limit) * 100 : 0)}%`, background: curAcc.color }} />
@@ -1979,29 +2114,30 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 )}
               </div>
 
+              <p className="text-[11px] text-slate-400">오늘 조회 성공: {curAcc.assets.filter(a => a.code && quoteStatus(a).today).length}/{curAcc.assets.filter(a => a.code).length}종목 · 종목별 조회 시각은 자산 탭에서 확인하세요. 조회 시각은 거래소 가격 기준 시각과 다를 수 있습니다.</p>
               {/* IRP/DC 안전자산 게이지 */}
                 {(activeAccount === "irp" || activeAccount === "dcIrp") && (
                   <div className={`${cardBase} p-5 border-l-4`} style={{ borderLeftColor: stats.riskRatio > 70 ? '#f43f5e' : '#10b981' }}>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-xs font-black text-slate-700 flex items-center gap-1.5">
-                        <ShieldCheck size={14} className="text-amber-500" /> {activeAccount === "irp" ? "개인IRP" : "DC형"} 안전자산 30% 의무
+                        <ShieldCheck size={14} className="text-amber-500" /> {activeAccount === "irp" ? "개인IRP" : "DC형"} 위험자산 비중 참고
                       </span>
-                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>규정용 위험자산 {stats.riskRatio.toFixed(1)}%</span>
+                      <span className={`text-xs font-black ${stats.riskRatio > 70 ? 'text-rose-500' : 'text-emerald-500'}`}>입력 분류 기준 {stats.riskRatio.toFixed(2)}%</span>
                     </div>
                     <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex">
                       <div style={{ width: `${Math.min(70, stats.riskRatio)}%` }} className="bg-rose-400 h-full" />
                       <div style={{ width: `${Math.max(0, stats.riskRatio - 70)}%` }} className="bg-rose-600 h-full animate-pulse" />
                       <div className="flex-1 bg-emerald-400 h-full" />
                     </div>
-                    {stats.riskRatio > 70 && <p className="mt-2 text-[10px] text-rose-500 font-bold">⚠️ 규정 위반: 안전자산 매수가 시급합니다.</p>}
+                    {stats.unknownRiskCount > 0 ? <p className="mt-2 text-xs text-amber-700">분류 미확인 종목 {stats.unknownRiskCount}개가 있습니다. 상품별 위험/안전 분류를 입력해주세요.</p> : stats.riskRatio > 70 && <p className="mt-2 text-xs text-rose-500">입력된 분류 기준 위험자산이 70%를 초과합니다. 실제 한도 적용은 증권사 분류를 확인해주세요.</p>}
                     
-                    {/* 실질 주식 노출 비중 */}
+                    {/* 추정 주식 노출 비중 */}
                     <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center">
                       <span className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
                         <TrendingUp size={13} className="text-blue-400" /> 실질 주식 노출
                       </span>
                       <span className="text-xs font-black text-blue-500">
-                        {stats.equityExposureRatio.toFixed(1)}%
+                        {stats.equityExposureRatio.toFixed(2)}%
                       </span>
                     </div>
                   </div>
@@ -2025,13 +2161,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                 {/* 리밸런싱 D-Day */}
                 <div className={`${cardBase} p-5 flex items-center justify-between`}>
                   <div>
-                    <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><Calendar size={14} /> 다음 리밸런싱</p>
+                    <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><Calendar size={14} /> 다음 리밸런싱 · {rebalanceInfo.date}</p>
                     <div className="flex items-center gap-2">
                       <p className="text-2xl font-black" style={{ color: dDay <= 0 ? curAcc.color : '#475569' }}>
-                        {dDay === 0 ? "D-Day" : dDay < 0 ? `D+${Math.abs(dDay)}` : `D-${dDay}`}
+                        {dDay === 0 ? "D-Day" : `D-${dDay}`}
                       </p>
                       {dDay <= 0 && <span className="px-2 py-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full animate-pulse">실행일!</span>}
                     </div>
+                    <p className="text-[11px] text-slate-500 mt-2">{rebalanceScheduleLabel(curAcc)}</p>
                   </div>
                   <button onClick={() => setShowRebalance(true)}
                     className="px-4 py-2.5 rounded-xl text-white font-black text-xs shadow-md transition-all active:scale-95"
@@ -2051,7 +2188,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   <div className="flex flex-col sm:flex-row gap-2 mt-4">
                     {[{ c: '#3b82f6', l: '순수 원금', p: stats.pctP, v: stats.purePrincipal }, { c: '#f59e0b', l: '재투자 배당', p: stats.pctD, v: stats.totalDividend }, { c: '#f43f5e', l: '평가 수익', p: stats.pctG, v: stats.capitalGain }].map(x => (
                       <div key={x.l} className="flex-1 flex items-center justify-between bg-slate-50 px-3 py-2 rounded-xl border border-slate-100">
-                        <div className="flex items-center gap-1.5 text-xs text-slate-600"><span className="w-2 h-2 rounded-full" style={{ background: x.c }}></span><span className="font-bold">{x.l} {x.p.toFixed(1)}%</span></div>
+                        <div className="flex items-center gap-1.5 text-xs text-slate-600"><span className="w-2 h-2 rounded-full" style={{ background: x.c }}></span><span className="font-bold">{x.l} {x.p.toFixed(2)}%</span></div>
                         <span className="text-xs font-bold text-slate-500">₩{fmt(x.v)}</span>
                       </div>
                     ))}
@@ -2111,9 +2248,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
                             let statusText = <span className="text-emerald-500 font-bold">✓ 균형</span>;
                             if (isDeficit) {
-                              statusText = <span className="text-amber-500 font-bold">▼ {item.gap.toFixed(1)}% / ₩{fmt(Math.round(item.deficitAmount))} 부족</span>;
+                              statusText = <span className="text-amber-500 font-bold">▼ {item.gap.toFixed(2)}% / ₩{fmt(Math.round(item.deficitAmount))} 부족</span>;
                             } else if (isSurplus) {
-                              statusText = <span className="text-blue-500 font-bold">▲ +{item.gap.toFixed(1)}% / ₩{fmt(Math.round(Math.abs(item.deficitAmount)))} 초과</span>;
+                              statusText = <span className="text-blue-500 font-bold">▲ +{item.gap.toFixed(2)}% / ₩{fmt(Math.round(Math.abs(item.deficitAmount)))} 초과</span>;
                             }
 
                             const maxScale = Math.max(item.targetWeight, item.currentWeight) * 1.2;
@@ -2145,7 +2282,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                     <div className="absolute top-0 bottom-0 border-l-2 border-dashed border-slate-400 z-10" style={{ left: `${targetPct}%`, marginLeft: '-1px' }} />
                                   </div>
                                   <div className="text-[10px] font-bold text-slate-500 w-24 text-right flex-shrink-0">
-                                    현재 <span className="text-slate-800">{item.currentWeight}%</span> / 목표 {item.targetWeight}%
+                                    현재 <span className="text-slate-800">{item.currentWeight.toFixed(2)}%</span> / 목표 {item.targetWeight.toFixed(2)}%
                                   </div>
                                 </div>
                               </div>
@@ -2158,7 +2295,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                     <div className={`${cardBase} p-6`}>
                       <div className="flex items-center justify-between mb-4">
                         <p className="text-sm font-bold text-slate-700 flex items-center gap-2"><Calculator size={16} style={{ color: curAcc.color }} /> 적립식 매수 도우미</p>
-                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded-lg">부족 상위 3개 비례분할</span>
+                        <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-1 rounded-lg">괴리 우선 · 개수 제한 없음</span>
                       </div>
                       
                       {buyLogic.invalidTarget ? (
@@ -2170,29 +2307,23 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       ) : (
                         <React.Fragment>
                           <div className="mb-6 space-y-2">
-                            <label className="block text-[10px] font-bold text-slate-400 uppercase">이번 달 집행 예정액 (₩)</label>
+                            <label className="block text-[10px] font-bold text-slate-400 uppercase">오늘 주문 가능한 실제 예수금 (₩)</label>
                             <div className="relative">
                               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold">₩</span>
-                              <input type="number" value={curAcc.monthlyInput === 0 ? "" : curAcc.monthlyInput} onChange={e => updateAcc({ monthlyInput: Number(e.target.value) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
+                              <input type="number" min="0" value={curAcc.availableCash == null ? recordedCash : curAcc.availableCash} onChange={e => updateAcc({ availableCash: Math.max(0, Number(e.target.value) || 0) })} className={`${inpBase} pl-10 text-lg font-black bg-slate-50 py-4`} />
                             </div>
-                            {stats.thisMonthDividend > 0 && (
-                              <button type="button" onClick={() => setUseDividend(v => !v)}
-                                className={`w-full flex justify-between items-center border rounded-xl px-4 py-3 text-xs font-bold transition-all active:scale-95 ${useDividend ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-slate-50 border-slate-200 text-slate-400"}`}>
-                                <span className="flex items-center gap-1.5">
-                                  <Coins size={14} /> 이달 배당금 자동 합산
-                                  <span className={`ml-1 px-1.5 py-0.5 rounded text-[9px] ${useDividend ? "bg-amber-200 text-amber-900" : "bg-slate-200 text-slate-500"}`}>
-                                    {useDividend ? "ON" : "OFF"}
-                                  </span>
-                                </span>
-                                <span className={useDividend ? "" : "line-through"}>+₩{fmt(stats.thisMonthDividend)}</span>
-                              </button>
-                            )}
-                            
+                            <p className="text-[11px] text-slate-500">입금·배당을 포함한 현재 예수금을 입력하세요. 예정 납입금과 배당 기록은 자동으로 더하지 않습니다. 주문 체결 후 잔액을 갱신해주세요.</p>
+                            <button onClick={() => updateAcc({ availableCash: null })} className="text-xs text-indigo-600 underline">등록된 예수금 사용: ₩{fmt(recordedCash)}</button>
+                            {curAcc.targetPortfolio.map(t => {
+                              const candidates = curAcc.assets.filter(a => !a.parkingAsset && a.category === t.name);
+                              return candidates.length > 1 ? <label key={t.name} className="block text-xs text-slate-600">{t.name} 매수 종목<select className={inpBase} value={(curAcc.preferredBuyAssets || {})[t.name] || candidates[0].id} onChange={e => updateAcc({ preferredBuyAssets: { ...curAcc.preferredBuyAssets, [t.name]: e.target.value } })}>{candidates.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label> : null;
+                            })}
+                            {buyLogic.planErrors.map(error => <p key={error} className="text-xs text-rose-600">{error}</p>)}
                             {/* 추가된 파킹 자산 활용 슬라이더 */}
-                            {stats.parkingValue > 0 && (
+                            {parkingSecuritiesValue > 0 && (
                               <div className="mt-2 p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
                                 <div className="flex justify-between items-center mb-3">
-                                  <span className="text-[11px] font-bold text-indigo-800 flex items-center gap-1.5"><Archive size={14}/> 매수 대기(파킹) 자금 활용</span>
+                                  <span className="text-[11px] font-bold text-indigo-800 flex items-center gap-1.5"><Archive size={14}/> 파킹 ETF 매도 후 자금 활용</span>
                                   <span className="text-xs font-black text-indigo-700 bg-white px-2 py-1 rounded-lg shadow-sm">{parkingDeployRatio}%</span>
                                 </div>
                                 <input type="range" min="0" max="100" step="10" value={parkingDeployRatio} onChange={e => setParkingDeployRatio(Number(e.target.value))} 
@@ -2200,14 +2331,14 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   style={{ background: `linear-gradient(to right, #6366f1 0%, #6366f1 ${parkingDeployRatio}%, #e0e7ff ${parkingDeployRatio}%, #e0e7ff 100%)` }}
                                 />
                                 <div className="flex justify-between items-center">
-                                  <p className="text-[10px] text-indigo-600 font-medium">파킹 자산 매도액 합산</p>
+                                  <p className="text-[10px] text-indigo-600 font-medium">주 단위 매도 후 수수료 차감액</p>
                                   <p className="text-xs font-bold text-indigo-700">+₩{fmt(buyLogic.deployParkingCash)}</p>
                                 </div>
                               </div>
                             )}
 
                             <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5 text-white mt-2">
-                              <span className="text-xs font-bold text-slate-300">총 매수 가능 예수금</span>
+                              <span className="text-xs font-bold text-slate-300">총 매수 재원 (수수료 여유금 포함)</span>
                               <span className="text-base font-black">₩{fmt(buyLogic.deployCash)}</span>
                             </div>
                           </div>
@@ -2227,11 +2358,12 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                                   <p className="text-[10px] font-bold text-slate-400">₩{fmt(o.cost)}</p>
                                 </div>
                               </div>
-                            )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">입금액 부족 또는 모든 비중이 초과되었습니다.</div>}
+                            )) : <div className="text-center py-6 text-slate-400 text-xs font-bold border-2 border-dashed border-slate-100 rounded-xl">1주 매수 재원이 부족하거나 목표 비중을 충족했습니다.</div>}
                           </div>
+                          <BuyPreview plan={buyLogic} />
                           <div className="p-4 bg-slate-50 rounded-xl flex gap-3 items-start">
                             <Info size={14} className="text-slate-400 mt-0.5 flex-shrink-0" />
-                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">부족 상위 3개 자산에 비례 배분했습니다. 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
+                            <p className="text-[11px] text-slate-500 font-bold leading-relaxed">투입 현금을 반영한 목표 금액을 기준으로, 가장 부족한 자산군부터 채우고 부족 수준이 같아지면 함께 배분합니다. 수수료 여유금 0.2%와 1주 단위를 반영했습니다. 예상 잔여 예수금 <span className="text-slate-800">₩{fmt(buyLogic.remainingCash)}</span>은 다음 달로 이월하세요.</p>
                           </div>
                         </React.Fragment>
                       )}
@@ -2258,6 +2390,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section assets-ui | 자산 입력 화면 */}
             {/* 자산 탭 */}
             {activeAccount !== "report" && activeTab === "assets" && (
               <div className={`${cardBase} overflow-hidden`}>
@@ -2295,7 +2428,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                               {asset.parkingAsset && <span className="mr-1 text-amber-500 font-black text-[10px] bg-amber-50 px-1 py-0.5 rounded">파킹</span>}
                               {asset.name || "종목명 없음"}
                             </p>
-                            <p className="text-[11px] text-slate-400 font-bold">{fmt(asset.quantity)}주 · ₩{fmt(asset.currentPrice || asset.price)}</p>
+                            <p className="text-[11px] text-slate-400 font-bold">{isCashAsset(asset) ? "예수금" : `${fmt(asset.quantity)}주`} · ₩{fmt(asset.currentPrice || asset.price)}</p>
+                            <p className={`text-[10px] mt-1 ${quoteStatus(asset).today ? "text-emerald-600" : "text-amber-600"}`}>{quoteStatus(asset).text}</p>
                           </div>
                           <div className="text-right"><p className="text-sm font-black text-slate-800">₩{fmt(cv)}</p><ReturnBadge amount={cv - ti} rate={pr} /></div>
                           <ChevronDown size={16} className={`flex-shrink-0 transition-transform duration-200 ml-1 ${isOpen ? 'rotate-180 text-slate-700' : 'text-slate-300'}`} />
@@ -2385,37 +2519,17 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
 
                                 {/* 안내 문구 */}
                                 <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
-                                  ℹ️ 혼합 자산은 설정한 <strong>주식 비중</strong>이 IRP/DC 위험자산 계산에 직접 반영됩니다.
+                                  ℹ️ 설정한 <strong>주식 비중</strong>은 추정 주식 노출 계산에 반영됩니다.
                                 </p>
                               </div>
                             )}
 
-                            {/* IRP 자산 유형 */}
                             {(activeAccount === "irp" || activeAccount === "dcIrp") && (
-                              MIXED_ASSET_CATEGORIES.includes(asset.category) ? (
-                                <div className="col-span-2 text-[10px] text-purple-500 font-bold bg-purple-50 rounded-xl px-3 py-2 border border-purple-100">
-                                  ℹ️ 혼합자산은 내부 주식비중(stockRatio) 기준으로 위험/안전이 자동 분리됩니다.
-                                </div>
-                              ) : asset.category === "현금/단기채" ? (
-                                <div className="col-span-2 text-[10px] text-slate-400 font-bold bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
-                                  ℹ️ 현금/단기채는 규정상 안전자산으로 자동 처리됩니다.
-                                </div>
-                              ) : (
-                                <div className="col-span-2">
-                                  <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-1 uppercase">
-                                    {activeAccount === "irp" ? "개인IRP" : "DC형"} 자산 유형
-                                    <Tip text={"퇴직연금계좌(IRP/DC)는 법적으로 위험자산 비중이 70%를 초과할 수 없습니다.\n\n• 위험자산: 주식형 파생 ETF (국내/해외 주식 등)\n• 안전자산: 채권형 ETF, 단기채, MMF 등\n\n70% 초과 시 대시보드에 경고가 표시됩니다."} />
-                                  </label>
-                                  <div className="flex gap-2">
-                                    {['위험자산', '안전자산'].map(type => (
-                                      <button key={type} onClick={() => chAsset(asset.id, "assetType", type)}
-                                        className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all border ${asset.assetType === type ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-500 border-slate-200'}`}>
-                                        {type}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )
+                              <div className="col-span-2">
+                                <label className="block text-[10px] font-bold text-slate-400 mb-2">증권사 상품 분류 기준 위험/안전 유형</label>
+                                <div className="flex gap-2">{["위험자산", "안전자산"].map(type => <button key={type} onClick={() => chAsset(asset.id, "assetType", type)} className={`flex-1 py-2.5 rounded-xl border text-xs font-bold ${asset.assetType === type ? "bg-slate-900 text-white" : "bg-white text-slate-500"}`}>{type}</button>)}</div>
+                                <p className="text-[10px] text-slate-400 mt-2">혼합 ETF도 상품 전체의 분류를 입력하세요. 내부 주식 비중은 추정 주식 노출에만 사용합니다.</p>
+                              </div>
                             )}
 
                             {/* 매수 대기 자금 (파킹) 토글 */}
@@ -2484,6 +2598,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section contributions-ui | 납입 입력 화면 */}
             {/* 납입 탭 */}
             {activeAccount !== "report" && activeTab === "contributions" && (
               <div className="space-y-4">
@@ -2600,6 +2715,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
               </div>
             )}
 
+            {/* @section settings-ui | 설정·버전·변경사항 화면 */}
             {/* 설정 탭 */}
             {activeAccount !== "report" && activeTab === "settings" && (
               <div className="space-y-4">
@@ -2709,36 +2825,44 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   {curAcc.targetPortfolio.length > 0 && (
                     <div className={`mt-4 p-4 rounded-xl flex justify-between items-center font-bold text-xs ${curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0) === 100 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
                       <span>합계 (100% 필수)</span>
-                      <span className="text-base font-black">{curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0)}%</span>
+                      <span className="text-base font-black">{formatPercent(curAcc.targetPortfolio.reduce((s, t) => s + (Number(t.value) || 0), 0))}</span>
                     </div>
                   )}
                 </div>
 
                 {/* 리밸런싱 주기 설정 */}
-                <div className={`${cardBase} p-6 space-y-3`}>
-                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4">
-                    <Calendar size={16} /> 정기 리밸런싱 주기
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
+                <div className={`${cardBase} p-6 space-y-4`}>
+                  <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Calendar size={16} /> 리밸런싱 주기 설정</p>
+                  <p className="text-xs text-slate-500">현재 계좌에만 적용됩니다.</p>
+                  <div>
+                    <label htmlFor="rebalance-frequency" className="block text-[10px] font-bold text-slate-400 mb-1">주기</label>
+                    <select id="rebalance-frequency" value={curAcc.rebalanceFrequency || "annual"}
+                      onChange={e => updateAcc({ rebalanceFrequency: e.target.value })} className={inpBase}>
+                      {REBALANCE_RULES.map(rule => <option key={rule.id} value={rule.id}>{rule.label}</option>)}
+                    </select>
+                  </div>
+                  <div className={`grid gap-3 ${getRebalanceRule(curAcc.rebalanceFrequency).months === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                    {getRebalanceRule(curAcc.rebalanceFrequency).months !== 1 && (
+                      <div>
+                        <label htmlFor="rebalance-month" className="block text-[10px] font-bold text-slate-400 mb-1">기준 월</label>
+                        <select id="rebalance-month" value={curAcc.rebalanceMonth} onChange={e => updateAcc({ rebalanceMonth: Number(e.target.value) })} className={inpBase}>
+                          {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 월</label>
-                      <select value={curAcc.rebalanceMonth} onChange={e => updateAcc({ rebalanceMonth: Number(e.target.value) })} className={inpBase}>
-                        {Array.from({length: 12}, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">기준 일</label>
-                      <input type="number" min="1" max="31" value={curAcc.rebalanceDay} 
+                      <label htmlFor="rebalance-day" className="block text-[10px] font-bold text-slate-400 mb-1">기준 일</label>
+                      <input id="rebalance-day" type="number" min="1" max="31" step="1" value={curAcc.rebalanceDay}
                         onChange={e => {
-                          const textVal = e.target.value;
-                          let val = Number(textVal);
-                          if (textVal.trim() === '' || isNaN(val) || val < 1) val = 1;
-                          const lastDay = new Date(new Date().getFullYear(), curAcc.rebalanceMonth, 0).getDate();
-                          const safeDay = Math.min(val, lastDay);
-                          updateAcc({ rebalanceDay: safeDay });
-                        }} 
-                        className={`${inpBase} text-right`} />
+                          const day = Number(e.target.value);
+                          updateAcc({ rebalanceDay: Number.isFinite(day) ? Math.max(1, Math.min(31, Math.trunc(day))) : 1 });
+                        }} className={`${inpBase} text-right`} />
                     </div>
+                  </div>
+                  <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 space-y-1">
+                    <p className="font-bold">{rebalanceScheduleLabel(curAcc)}</p>
+                    <p>다음 리밸런싱: {rebalanceInfo.date} · {dDay === 0 ? "D-Day" : `D-${dDay}`}</p>
+                    <p>선택한 날짜가 없는 달은 말일을 사용합니다. 주말·공휴일도 달력 날짜 기준입니다.</p>
                   </div>
                 </div>
 
@@ -2769,15 +2893,69 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                       <p className="text-[10px] font-bold text-slate-400 uppercase">연도 마감 및 이월</p>
                       <Tip text={"작년까지의 월별 납입 내역을 '과거 누적 합계'로 압축합니다.\n\n• 실행 전 자동으로 JSON 백업이 저장됩니다.\n• 현재 계좌에만 적용됩니다.\n• 올해 데이터는 그대로 유지됩니다."} />
                     </div>
-                    <button onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
+                    <button disabled={isSettling} onClick={doSettle} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-md active:scale-95 transition-all flex items-center justify-center gap-2">
                       <RefreshCw size={16} /> 지난 연도 데이터 마감 및 이월 (현재 계좌)
                     </button>
                   </div>
                 </div>
+                <details className={`${cardBase} p-5 text-xs text-slate-500`}>
+                  <summary className="cursor-pointer font-bold leading-6">
+                    앱 버전 v{APP_VERSION} · 업데이트 {APP_UPDATED_AT}
+                  </summary>
+                  <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
+                    <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>이번 달 배당금 자동합산 계산 제거 (v1.8.0에서 매수 도우미가 실제 예수금 기준으로 바뀌어 사용되지 않던 계산)</li>
+                      <li>절세계좌는 인출이 제한되어 배당금이 예수금으로 남으므로 별도 합산 없이 매수에 반영됩니다</li>
+                      <li>배당 납입내역 입력·누적 배당금·수익률 계산은 변경 없음</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.9.1 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>매수 미리보기를 자산군별 괴리율과 같은 막대·순위·색상으로 통일</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.9.0 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>권장 매수 후 자산군별 예상 비중 미리보기</li>
+                      <li>현재·매수 후·목표 비교와 예상 매수금액·수수료·잔여 현금 표시</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.8.0 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>적립식 매수 도우미를 괴리 비교 배분으로 변경</li>
+                      <li>매수 대상 상위 3개 제한 해제</li>
+                      <li>1주 단위·수수료·잔여 현금 재배분 반영</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.7.0 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>계좌별 연·반기·분기·월 리밸런싱 주기 설정</li>
+                      <li>주기에 맞춘 다음 날짜·D-Day 및 월말 보정</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.3 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>도넛 차트와 비중 표시를 소수점 둘째 자리로 통일</li>
+                      <li>차트 데이터는 원래 정밀도를 유지하고 표시할 때만 반올림</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.2 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>기능별 코드 위치 표식과 유지보수용 코드 지도 추가</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.1 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>수익률 설명이 잘리지 않도록 카드 안에서 펼쳐 표시</li>
+                      <li>통합 리포트 상단에 앱 버전 표시</li>
+                    </ul>
+                    <p className="font-bold text-slate-800 pt-2">v1.6.0 변경사항</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>통합 자산 요약에 총 누적 수익률 추가</li>
+                      <li>납입 원금이 없는 경우 수익률을 —로 표시</li>
+                      <li>설정에 앱 버전, 업데이트 날짜 및 변경사항 표시</li>
+                    </ul>
+                  </div>
+                </details>
               </div>
             )}
           </main>
 
+          {/* @section navigation-ui | 하단 탭 */}
           {/* 하단 탭 바 */}
           <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-xl border-t border-slate-200 shadow-[0_-10px_40px_rgba(0,0,0,0.04)] pb-[env(safe-area-inset-bottom)]">
             <div className="max-w-4xl mx-auto grid grid-cols-4 h-[68px]">
@@ -2797,6 +2975,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             </div>
           </nav>
 
+          {/* @section rebalance-modal | 리밸런싱 주문 상세 */}
           {/* 리밸런싱 모달 */}
           {showRebalance && activeHasTarget && !buyLogic.invalidTarget && (
             <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
@@ -2845,6 +3024,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                         </ul>
                       </div>
                       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                        <p className="text-xs text-slate-500 mb-3">기존 예수금 ₩{fmt(totalInvestableCash)} · 매수 후 예상 잔액 ₩{fmt(Math.floor(buyLogic.fullRemainingCash))}. 매수에도 수수료 여유금 0.2%를 반영했습니다.</p>
                         <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">총 매도 예상 차익 (과세이연)</span><span className="font-black text-rose-500">₩{fmt(buyLogic.totalProfit)}</span></div>
                         <div className="flex justify-between items-center mb-2.5 text-xs"><span className="text-slate-500 font-bold">예상 매도 수수료 (~0.2%)</span><span className="font-black text-slate-400">-₩{fmt(Math.round(buyLogic.fee))}</span></div>
                         <div className="border-t border-slate-100 pt-3 mt-1 flex justify-between items-center">
@@ -2865,6 +3045,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       );
     }
 
+    // @section bootstrap | React 앱 실행
     const rootElement = document.getElementById("root");
     const root = createRoot(rootElement);
     root.render(<App />);
