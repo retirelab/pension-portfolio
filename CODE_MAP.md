@@ -36,6 +36,7 @@ rg -n 'cumulativeReturnRate|reportStats' index.html
 | `asset-edit` | 자산·납입내역 편집 |
 | `price-fetch` | 가격 조회·동시성·갱신 |
 | `backup-restore` | JSON 백업·복원·연도마감 |
+| `household-import` | 가계앱 파일 검증 미리보기·자동 백업·적용. 순수 계산은 household-import.js |
 | `app-shell` | 복구 화면·탭·공통 화면 구성 |
 | `report-ui` | 통합 리포트 화면 |
 | `dashboard-ui` | 계좌 대시보드·리밸런싱 요약 |

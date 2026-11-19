@@ -2,6 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://esm.sh; style-src 'self' 'unsafe-inline'; connect-src https://script.google.com https://script.googleusercontent.com https://api.allorigins.win https://api.codetabs.com https://esm.sh; img-src 'self' data:; form-action 'none'; base-uri 'none'; worker-src 'self'; manifest-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
   <link rel="manifest" href="/pension-portfolio/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -13,7 +14,8 @@
   <title>절세 3총사 관리 대시보드</title>
   
   <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="./household-import.js"></script>
   
   <!-- React JSX 자동 런타임용 import map (Babel 8 automatic runtime 대응) -->
   <script type="importmap">
@@ -87,8 +89,8 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.9.2";
-    const APP_UPDATED_AT = "2026-11-18";
+    const APP_VERSION = "1.10.0";
+    const APP_UPDATED_AT = "2026-11-19";
     const formatPercent = (value) => {
       const num = Number(value);
       if (!Number.isFinite(num)) return "—";
@@ -254,11 +256,13 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     };
     function validateState(raw, settings) {
       if (!isRecord(raw) || !isRecord(settings) || typeof settings.userName !== "string" || !["5500이하", "5500초과"].includes(settings.incomeLevel)) throw new Error("계좌 또는 사용자 설정을 확인해주세요.");
+      if (settings.householdMapping !== undefined) HouseholdImport.validateMapping(settings.householdMapping);
       for (const key of ACCOUNT_KEYS.filter(k => k !== "dcIrp" || raw[k] !== undefined)) {
         const a = raw[key];
         if (!isRecord(a) || typeof a.label !== "string" || !Array.isArray(a.assets) || !Array.isArray(a.contributions) || !Array.isArray(a.pastContributions) || !Array.isArray(a.targetPortfolio)) throw new Error(`${key}: 필수 계좌 항목이 없습니다.`);
         if (!Number.isInteger(a.rebalanceMonth) || a.rebalanceMonth < 1 || a.rebalanceMonth > 12 || !Number.isInteger(a.rebalanceDay) || a.rebalanceDay < 1 || a.rebalanceDay > 31 || !finiteNonnegative(a.monthlyInput) || !finiteNonnegative(a.limit)) throw new Error(`${key}: 계좌 설정 값이 올바르지 않습니다.`);
         if (a.rebalanceFrequency !== undefined && !REBALANCE_RULES.some(r => r.id === a.rebalanceFrequency)) throw new Error(`${key}: 리밸런싱 주기가 올바르지 않습니다.`);
+        if (a.lastHouseholdImportAt !== undefined && !HouseholdImport.validTimestamp(a.lastHouseholdImportAt)) throw new Error("마지막 가계앱 가져오기 시각이 올바르지 않습니다.");
         if (a.availableCash != null && !finiteNonnegative(a.availableCash)) throw new Error(`${key}: 실제 예수금이 올바르지 않습니다.`);
         if (a.preferredBuyAssets !== undefined && !isRecord(a.preferredBuyAssets)) throw new Error(`${key}: 매수 종목 설정이 올바르지 않습니다.`);
         const ids = new Set();
@@ -279,7 +283,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return { accounts, global: { ...settings } };
     }
     function validateBackup(d) {
-      if (!isRecord(d) || !["1.0", "1.1", "1.2"].includes(String(d.schemaVersion))) throw new Error("지원하지 않는 백업 버전입니다.");
+      if (!isRecord(d) || !["1.0", "1.1", "1.2", "1.3"].includes(String(d.schemaVersion))) throw new Error("지원하지 않는 백업 버전입니다.");
       const state = validateState(d.accounts, d.global);
       const history = d.history === undefined ? [] : d.history;
       if (!Array.isArray(history)) throw new Error("자산 이력이 올바르지 않습니다.");
@@ -963,7 +967,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       return (
         <div className="relative" ref={ref}>
           <button type="button" onClick={() => setShowPreset(!showPreset)} className={`${inpBase} text-left flex justify-between items-center ${!asset.category ? 'text-slate-400' : 'text-slate-800'}`}>
-            <span className="truncate mr-2">{asset.category || "자산군 선택"}</span>
+            <span className="truncate mr-2">{asset.category || "분류 필요"}</span>
             <ChevronDown size={14} className={`flex-shrink-0 transition-transform duration-200 ${showPreset ? 'rotate-180 text-slate-700' : 'text-slate-400'}`}/>
           </button>
           {showPreset && (
@@ -1082,6 +1086,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const [loadError, setLoadError] = useState("");
       const [saveError, setSaveError] = useState("");
       const [isRestoring, setIsRestoring] = useState(false);
+      const [householdPreview, setHouseholdPreview] = useState(null);
+      const [householdText, setHouseholdText] = useState("");
+      const [isImportingHousehold, setIsImportingHousehold] = useState(false);
+      const householdBusy = useRef(false);
       const [isSettling, setIsSettling] = useState(false);
       const [activeAccount, setActiveAccount] = useState("pension1");
       const [activeTab, setActiveTab] = useState("dashboard");
@@ -1622,11 +1630,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           else { applyQuotes(key, [result]); showMsg("error", "현재가 조회에 실패했습니다. 이전 가격을 유지합니다."); }
         } finally { setFetchingId(null); }
       };
-      const refreshPrices = async allAccounts => {
+      const refreshPrices = async (allAccounts, capturedAccounts = accounts, selectedKeys) => {
         if (priceBusy.current) return;
         priceBusy.current = true;
-        const keys = allAccounts ? Object.keys(accounts) : [activeAccount];
-        const capturedAccounts = accounts;
+        const keys = selectedKeys ?? (allAccounts ? Object.keys(capturedAccounts) : [activeAccount]);
+
         const failed = [];
         allAccounts ? setIsFetchingAll(true) : setIsFetching(true);
         setFetchError("");
@@ -1652,7 +1660,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       // @section backup-restore | JSON 백업·복원·연도마감
       const exportData = async () => {
         const history = await getAllHistory();
-        downloadJson({ schemaVersion: "1.2", exportedAt: new Date().toISOString(), accounts, global, history }, `절세3총사_백업_${localDateKey()}.json`);
+        downloadJson({ schemaVersion: "1.3", exportedAt: new Date().toISOString(), accounts, global, history }, `절세3총사_백업_${localDateKey()}.json`);
       };
       const onExport = async () => {
         try { await exportData(); showMsg("success", "백업 파일 다운로드를 요청했습니다."); }
@@ -1664,7 +1672,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       };
       const importData = async (e) => {
         const file = e.target.files[0]; e.target.value = "";
-        if (!file || isRestoring) return;
+        if (!file || isRestoring || householdBusy.current) return;
         setIsRestoring(true);
         try {
           if (file.size > 20 * 1024 * 1024) throw new Error("백업 파일은 20MB 이하만 지원합니다.");
@@ -1686,7 +1694,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
         } finally { setIsRestoring(false); }
       };
       const doSettle = async () => {
-        if (isSettling) return;
+        if (isSettling || householdBusy.current) return;
         setIsSettling(true);
         try {
           const key = activeAccount;
@@ -1699,6 +1707,63 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
           showMsg("success", "원금·배당 합계를 유지하며 과거 연도를 마감했습니다.");
         } catch (error) { showMsg("error", `마감을 중단했습니다. ${error.message}`); }
         finally { setIsSettling(false); }
+      };
+
+
+      // @section household-import | 가계앱 가져오기 미리보기·백업·적용
+      const prepareHouseholdImport = text => {
+        const { accounts: before, global: settings } = stateRef.current;
+        const file = HouseholdImport.parse(text);
+        const plan = HouseholdImport.applyHouseholdImport(before, file, settings.householdMapping ?? HouseholdImport.DEFAULT_MAPPING, localDateKey());
+        setHouseholdPreview({ ...plan, accounts: validateState(plan.accounts, settings).accounts, before, settings });
+      };
+      const readHouseholdFile = async event => {
+        const file = event.target.files[0];
+        event.target.value = "";
+        if (!file || householdBusy.current) return;
+        setHouseholdPreview(null);
+        try {
+          if (file.size > HouseholdImport.MAX_BYTES) throw new Error("20MB 이하의 자료만 가져올 수 있습니다.");
+          prepareHouseholdImport(await file.text());
+        } catch (error) { showMsg("error", error.message); }
+      };
+      const readHouseholdPaste = () => {
+        setHouseholdPreview(null);
+        try {
+          prepareHouseholdImport(householdText);
+          setHouseholdText("");
+        } catch (error) { showMsg("error", error.message); }
+      };
+      const saveHouseholdMapping = (key, input) => {
+        const current = global.householdMapping ?? HouseholdImport.DEFAULT_MAPPING;
+        const next = { ...current, [key]: input.value.trim().toUpperCase() || null };
+        try {
+          HouseholdImport.validateMapping(next);
+          setHouseholdPreview(null);
+          setGlobal({ ...global, householdMapping: next });
+        } catch (error) {
+          input.value = current[key] ?? "";
+          showMsg("error", error.message);
+        }
+      };
+      const commitHouseholdImport = async () => {
+        const preview = householdPreview;
+        if (!preview || householdBusy.current || priceBusy.current || isRestoring || isSettling) return;
+        const stillCurrent = () => stateRef.current.accounts === preview.before && stateRef.current.global === preview.settings;
+        householdBusy.current = true;
+        setIsImportingHousehold(true);
+        try {
+          if (!stillCurrent()) throw new Error("계좌나 설정이 바뀌었습니다. 변경 내용을 다시 확인해주세요.");
+          await exportData();
+          if (!stillCurrent()) throw new Error("백업 중 계좌나 설정이 바뀌었습니다. 다시 시도해주세요.");
+          saveState(preview.accounts, preview.settings);
+          quoteVersions.current.forEach((v, key) => quoteVersions.current.set(key, v + 1));
+          setAccounts(preview.accounts);
+          setHouseholdPreview(null);
+          showMsg("success", "보유 자료를 적용했습니다. 연결 계좌의 현재가를 조회합니다.");
+          await refreshPrices(true, preview.accounts, preview.summaries.map(row => row.key));
+        } catch (error) { showMsg("error", "가져오기를 완료하지 못했습니다. " + error.message); }
+        finally { householdBusy.current = false; setIsImportingHousehold(false); }
       };
 
       // @section app-shell | 복구 화면·탭·공통 화면 구성
@@ -2885,6 +2950,50 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </div>
                 </div>
 
+
+                <div className={`${cardBase} p-5 space-y-3`}>
+                  <h2 className="text-sm font-bold">가계앱 보유 가져오기</h2>
+                  <p className="text-xs text-slate-600">계좌를 연결한 뒤 내보낸 파일을 선택하거나 JSON을 붙여넣으세요.</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {ACCOUNT_KEYS.map(key => {
+                      const linked = (global.householdMapping ?? HouseholdImport.DEFAULT_MAPPING)[key] ?? "";
+                      return <label key={key} className="block text-xs">{accounts[key].label}
+                        <input type="text" key={linked} defaultValue={linked} placeholder="연결 없음"
+                          disabled={isImportingHousehold} onBlur={e => { if (e.target.value !== linked) saveHouseholdMapping(key, e.target); }}
+                          className={`${inpBase} mt-1`} />
+                      </label>;
+                    })}
+                  </div>
+                  <label className="block text-xs font-bold">보유 파일 선택
+                    <input type="file" accept=".json,application/json" className="block mt-1 max-w-full"
+                      disabled={isImportingHousehold} onChange={readHouseholdFile} />
+                  </label>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer font-bold">JSON 붙여넣기</summary>
+                    <textarea aria-label="가계앱 보유 JSON" value={householdText} onChange={e => setHouseholdText(e.target.value)}
+                      disabled={isImportingHousehold} className={`${inpBase} mt-2 min-h-20`} />
+                    <button type="button" className="mt-2 rounded-lg bg-slate-100 px-3 py-2 font-bold"
+                      onClick={readHouseholdPaste} disabled={isImportingHousehold || !householdText.trim()}>붙여넣은 자료 확인</button>
+                  </details>
+                  {householdPreview && <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs">
+                    <h3 className="font-bold">가져올 변경 내용</h3>
+                    {householdPreview.summaries.map(row => <div key={row.key} className="space-y-1 border-t border-slate-200 pt-2">
+                      <p className="font-bold">{row.label} · {row.sourceId}</p>
+                      {row.allZero && <p className="text-amber-800">이 계좌의 가져올 국내 종목이 모두 0주입니다.</p>}
+                      {[...row.changed, ...row.zeroed].map(c => <p key={c.code}>{c.name} · {fmt(c.before)}주 → {fmt(c.after)}주</p>)}
+                      {row.added.map(c => <p key={c.code}>{c.name} · 신규 {fmt(c.after)}주 · 분류 필요</p>)}
+                      <p>예수금 {fmt(row.cash.before)}원 → {row.cash.after === null ? "기존 값 유지" : fmt(row.cash.after) + "원"}</p>
+                      <p>{row.dividends ? `올해 배당 ${row.dividends.before}건 → ${row.dividends.after}건` : "올해 배당 마감됨"}</p>
+                    </div>)}
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={commitHouseholdImport} disabled={isImportingHousehold || isFetchingAll || isFetching}
+                        className="rounded-lg bg-indigo-700 px-3 py-2 font-bold text-white">{isImportingHousehold ? "적용 중…" : "백업 후 적용"}</button>
+                      <button type="button" onClick={() => setHouseholdPreview(null)} disabled={isImportingHousehold}
+                        className="rounded-lg bg-white px-3 py-2 font-bold">취소</button>
+                    </div>
+                  </div>}
+                </div>
+
                 {/* 데이터 관리 */}
                 <div className={`${cardBase} p-6 space-y-3`}>
                   <p className="text-sm font-bold text-slate-800 flex items-center gap-2 mb-4"><Archive size={16} /> 데이터 관리</p>
@@ -2904,6 +3013,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <p>가계앱 보유·예수금·올해 배당 가져오기, 적용 전 백업, 가격 조회 연결 보안 강화</p>
+                    <p className="font-bold text-slate-800 pt-2">v1.9.2 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
                       <li>이번 달 배당금 자동합산 계산 제거 (v1.8.0에서 매수 도우미가 실제 예수금 기준으로 바뀌어 사용되지 않던 계산)</li>
                       <li>절세계좌는 인출이 제한되어 배당금이 예수금으로 남으므로 별도 합산 없이 매수에 반영됩니다</li>
