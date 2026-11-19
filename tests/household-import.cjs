@@ -49,7 +49,7 @@ assert.deepEqual(repeat.pension1.assets, next.pension1.assets);
 const zero = applyHouseholdImport(accounts, { ...file, accounts: [source("ACC-003", [])] }, DEFAULT_MAPPING, today);
 assert.equal(zero.summaries[0].allZero, true);
 assert.equal(zero.accounts.pension1.assets[0].quantity, 0);
-assert.throws(() => applyHouseholdImport(accounts, { ...file, schemaVersion: 2 }, DEFAULT_MAPPING, today), /스키마/);
+assert.throws(() => applyHouseholdImport(accounts, { ...file, schemaVersion: 99 }, DEFAULT_MAPPING, today), /스키마/);
 assert.throws(() => applyHouseholdImport(accounts, file, {...DEFAULT_MAPPING, pension2: "ACC-003"}, today), /두 번/);
 assert.throws(() => api.parse(" ".repeat(api.MAX_BYTES + 1)), /20MB/);
 
@@ -60,4 +60,41 @@ const settings = { userName: "합성", incomeLevel: "5500이하" };
 assert.doesNotThrow(() => context.validateBackup({ schemaVersion: "1.2", accounts, global: settings }));
 assert.doesNotThrow(() => context.validateBackup({ schemaVersion: "1.3", accounts: next, global: { ...settings, householdMapping: DEFAULT_MAPPING } }));
 assert.throws(() => context.validateState({ ...next, pension1: { ...next.pension1, lastHouseholdImportAt: "?" } }, settings), /시각/);
+
+const importedAt = "2026-11-19T12:50:00+09:00";
+const fixtureAccount = (id, version) => ({
+  계좌ID: id,
+  holdings: [{ 보유ID: "SAMPLE-01", 종목코드: "123456", 통화: "KRW", 수량: 5 }],
+  dividends: [{
+    배당ID: "SAMPLE-DIV-" + id,
+    지급일: "2026-09-28",
+    ...(version === 1 ? { 실수령액: 53.2 } : { 실수령액원: 53 }),
+  }],
+});
+const oldExport = {
+  schema: "household-holdings", schemaVersion: 1, exportedAt: importedAt, sourceUi: 70,
+  accounts: ["ACC-003", "ACC-004", "ACC-005", "ACC-002", "ACC-008"].map(id => fixtureAccount(id, 1)),
+};
+const oldPlan = applyHouseholdImport(accounts, api.parse(JSON.stringify(oldExport)), DEFAULT_MAPPING, today);
+assert.equal(oldPlan.summaries.length, 4);
+assert.equal(oldPlan.accounts.irp.contributions.at(-1).amount, 53.2);
+assert.equal(oldPlan.accounts.irp.contributions.at(-1).memo, "종목명 미확인");
+assert.equal(oldPlan.accounts.pension1.assets[0].price, accounts.pension1.assets[0].price);
+assert.equal(oldPlan.accounts.pension1.assets[2].price, accounts.pension1.assets[2].price);
+
+const examples = ["ACC-003", "ACC-004", "ACC-005", "ACC-002"].map(id => fixtureAccount(id, 2));
+examples[0].예수금통화별 = { KRW: 175, USD: 60.1234 };
+examples[1].예수금통화별 = { USD: 12.75 };
+examples[2].예수금통화별 = null;
+examples[0].holdings[0].평균매입가원 = 19;
+examples[0].dividends[0].종목명 = "합성 지급 종목";
+const newExport = { ...oldExport, schemaVersion: api.SCHEMA_VERSION, sourceUi: 71, accounts: examples };
+const nextV2 = applyHouseholdImport(accounts, newExport, DEFAULT_MAPPING, today).accounts;
+assert.equal(nextV2.pension1.assets[0].price, 19);
+assert.equal(nextV2.pension1.assets[2].price, 175);
+assert.equal(nextV2.pension2.assets[2].price, 43);
+assert.equal(nextV2.isa.assets[2].price, 43);
+assert.equal(nextV2.pension1.contributions.at(-1).memo, "합성 지급 종목");
+assert.equal(nextV2.pension1.contributions.at(-1).amount, 53);
+assert.doesNotThrow(() => context.validateState(nextV2, settings));
 console.log("가계앱 가져오기 및 백업 호환 시험 통과");

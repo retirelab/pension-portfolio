@@ -89,7 +89,7 @@
     } from "https://esm.sh/lucide-react@0.292.0";
 
     // @section release | 버전·수익률·공통 도구
-    const APP_VERSION = "1.10.0";
+    const APP_VERSION = "1.10.1";
     const APP_UPDATED_AT = "2026-11-19";
     const formatPercent = (value) => {
       const num = Number(value);
@@ -446,33 +446,36 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
     }
 
     function calculateBuyPlan(acc, actualCash, parkingRatio = 0) {
-      const allocationBaseValue = getAllocationBaseValue(acc.assets);
+      const isUnclassified = asset => !isCashAsset(asset) && !String(asset.category ?? "").trim();
+      const unclassifiedAssets = acc.assets.filter(asset => isUnclassified(asset) && asset.quantity > 0);
+      const planningAssets = acc.assets.filter(asset => !isUnclassified(asset));
+      const allocationBaseValue = getAllocationBaseValue(planningAssets);
       const planErrors = [];
       const targetSum = acc.targetPortfolio.reduce((n, t) => n + Number(t.value || 0), 0);
       const names = acc.targetPortfolio.map(t => t.name.trim());
       const invalidTarget = Math.abs(targetSum - 100) > 0.000001 || new Set(names).size !== names.length || acc.targetPortfolio.some(t => !finiteNonnegative(t.value) || !t.name.trim());
-      const empty = { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: actualCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: actualCash, planErrors };
+      const empty = { currentPortfolio: [], fullRebalancePlan: [], buyOrders: [], remainingCash: actualCash, totalProfit: 0, fee: 0, totalSellAmt: 0, deviationData: [], invalidTarget, deployParkingCash: 0, generatedParkingSellOrders: [], deployCash: actualCash, planErrors, unclassifiedAssets };
       if (invalidTarget || !acc.targetPortfolio.some(t => t.value > 0)) return empty;
-      const targets = acc.targetPortfolio.filter(t => t.name !== "현금/단기채" || acc.assets.some(a => !isParkingAsset(a) && a.category === t.name));
+      const targets = acc.targetPortfolio.filter(t => t.name !== "현금/단기채" || planningAssets.some(a => !isParkingAsset(a) && a.category === t.name));
       const activeSum = targets.reduce((n, t) => n + t.value, 0);
       if (activeSum <= 0) return { ...empty, invalidTarget: true };
       const categories = [...targets.map(t => ({ ...t, targetWeight: t.value / activeSum * 100 }))];
-      acc.assets.filter(a => !isParkingAsset(a)).forEach(a => {
+      planningAssets.filter(a => !isParkingAsset(a)).forEach(a => {
         if (!categories.some(t => t.name === a.category)) categories.push({ name: a.category, targetWeight: 0, color: "#94a3b8" });
       });
       const representative = category => {
-        const candidates = acc.assets.filter(a => !isParkingAsset(a) && a.category === category);
+        const candidates = planningAssets.filter(a => !isParkingAsset(a) && a.category === category);
         const selectedId = (acc.preferredBuyAssets || {})[category];
         return candidates.find(a => String(a.id) === String(selectedId)) || candidates[0];
       };
       const currentPortfolio = categories.map(t => {
-        const categoryValue = acc.assets.filter(a => !isParkingAsset(a) && a.category === t.name).reduce((n, a) => n + getAssetMarketValue(a), 0);
+        const categoryValue = planningAssets.filter(a => !isParkingAsset(a) && a.category === t.name).reduce((n, a) => n + getAssetMarketValue(a), 0);
         if (t.targetWeight > 0 && !representative(t.name)) planErrors.push(`${t.name}: 매수할 종목을 등록해주세요.`);
         return { ...t, categoryValue, value: allocationBaseValue > 0 ? categoryValue / allocationBaseValue * 100 : 0 };
       });
       const generatedParkingSellOrders = [];
-      let requested = Math.floor(getParkingSecuritiesValue(acc.assets) * Math.max(0, Math.min(100, parkingRatio)) / 100);
-      for (const a of acc.assets.filter(a => isParkingAsset(a) && !isCashAsset(a))) {
+      let requested = Math.floor(getParkingSecuritiesValue(planningAssets) * Math.max(0, Math.min(100, parkingRatio)) / 100);
+      for (const a of planningAssets.filter(a => isParkingAsset(a) && !isCashAsset(a))) {
         const cp = orderPrice(a);
         if (requested <= 0 || cp <= 0) continue;
         const shares = Math.min(Math.floor(a.quantity), Math.floor(requested / cp));
@@ -493,7 +496,7 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       const normalSells = [];
       currentPortfolio.forEach(p => {
         let excess = Math.max(0, p.categoryValue - targetBase * p.targetWeight / 100);
-        for (const a of acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name)) {
+        for (const a of planningAssets.filter(a => !isParkingAsset(a) && a.category === p.name)) {
           const cp = orderPrice(a);
           if (cp <= 0) continue;
           const shares = Math.min(Math.floor(a.quantity), Math.floor((excess + 1e-8) / cp));
@@ -513,10 +516,10 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
       })];
       let priority = 0;
       const deviationData = currentPortfolio.map(p => {
-        const matches = acc.assets.filter(a => !isParkingAsset(a) && a.category === p.name);
+        const matches = planningAssets.filter(a => !isParkingAsset(a) && a.category === p.name);
         return { ...p, currentWeight: p.value, gap: p.value - p.targetWeight, deficitAmount: allocationBaseValue * p.targetWeight / 100 - p.categoryValue, assetName: matches.length > 1 ? `${matches[0].name} 외 ${matches.length - 1}개` : matches[0]?.name || "" };
       }).sort((a, b) => b.deficitAmount - a.deficitAmount).map(p => ({ ...p, priority: p.deficitAmount > 0 ? ++priority : null }));
-      return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, fullRemainingCash: fullBuys.remainingCash };
+      return { currentPortfolio, fullRebalancePlan, buyOrders: buyOnly.orders, remainingCash: buyOnly.remainingCash, totalProfit: normalSells.reduce((n, o) => n + o.profit, 0), fee, totalSellAmt, deviationData, invalidTarget, deployParkingCash, generatedParkingSellOrders, deployCash, planErrors, unclassifiedAssets, fullRemainingCash: fullBuys.remainingCash };
     }
 
     // @section buy-preview | 권장 매수 후 비중 시뮬레이션
@@ -2115,6 +2118,9 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
             {/* 대시보드 */}
             {activeAccount !== "report" && activeTab === "dashboard" && (
               <div className="-mt-20 relative z-10 space-y-4">
+                {buyLogic.unclassifiedAssets.length > 0 && <p role="status" className="rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-900">
+                        분류 필요 · {buyLogic.unclassifiedAssets.map(asset => asset.name || asset.code).join(", ")} · 매수·매도 계획에서 제외
+                      </p>}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
                   {/* 총 평가금액 카드 */}
@@ -3013,6 +3019,8 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   </summary>
                   <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
                     <p className="font-bold text-slate-800">v{APP_VERSION} 변경사항</p>
+                    <p>가계앱 보유 스키마 2 및 기존 파일 지원, 분류가 필요한 종목은 매수·매도 계획에서 제외</p>
+                    <p className="font-bold text-slate-800 pt-2">v1.10.0 변경사항</p>
                     <p>가계앱 보유·예수금·올해 배당 가져오기, 적용 전 백업, 가격 조회 연결 보안 강화</p>
                     <p className="font-bold text-slate-800 pt-2">v1.9.2 변경사항</p>
                     <ul className="list-disc pl-4 space-y-1">
@@ -3099,8 +3107,11 @@ const DEFAULT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '
                   <button onClick={() => setShowRebalance(false)} className="p-2 rounded-full bg-slate-100 text-slate-500"><X size={18} /></button>
                 </div>
                 <div className="p-4 sm:p-6 overflow-y-auto space-y-3 bg-slate-50 flex-1">
+                      {buyLogic.unclassifiedAssets.length > 0 && <p role="status" className="rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-900">
+                        분류 필요 · {buyLogic.unclassifiedAssets.map(asset => asset.name || asset.code).join(", ")} · 매수·매도 계획에서 제외
+                      </p>}
                   {buyLogic.fullRebalancePlan.length === 0 ? (
-                    <div className="text-center py-10 text-slate-400 text-sm font-bold border-2 border-dashed border-slate-200 rounded-2xl bg-white">현재 비중이 완벽합니다! 🎉</div>
+                    <div className="text-center py-10 text-slate-400 text-sm font-bold border-2 border-dashed border-slate-200 rounded-2xl bg-white">{buyLogic.unclassifiedAssets.length ? "분류된 종목에 대한 주문이 없습니다." : "현재 비중이 완벽합니다! 🎉"}</div>
                   ) : buyLogic.fullRebalancePlan.map((item, i) => {
                     const sell = item.shares < 0;
                     const isParking = item.isParkingLiquidation;

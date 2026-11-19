@@ -1,6 +1,7 @@
 /* 가계앱 내보내기 형식의 검증과 가져오기. 브라우저 저장소와 네트워크는 사용하지 않는다. */
 const HouseholdImport = (() => {
   const MAX_BYTES = 20 * 1024 * 1024;
+  const SCHEMA_VERSION = 2;
   const DEFAULT_MAPPING = Object.freeze({
     pension1: "ACC-003", pension2: "ACC-004", irp: "ACC-005", dcIrp: null, isa: "ACC-002",
   });
@@ -8,7 +9,7 @@ const HouseholdImport = (() => {
   const isAmount = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const isAccountId = value => typeof value === "string" && /^ACC-[0-9]+$/.test(value);
   const isCode = value => typeof value === "string" && /^[0-9A-Z]{6}$/.test(value);
-  const isText = value => value === null || typeof value === "string";
+  const isText = value => value == null || typeof value === "string";
   const validDate = value => {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const time = Date.parse(value + "T00:00:00Z");
@@ -38,9 +39,9 @@ const HouseholdImport = (() => {
   }
 
   function readFile(file) {
-    if (!isObject(file) || file.schema !== "household-holdings" || file.schemaVersion !== 1 ||
+    if (!isObject(file) || file.schema !== "household-holdings" || ![1, SCHEMA_VERSION].includes(file.schemaVersion) ||
         !validTimestamp(file.exportedAt) || !Array.isArray(file.accounts)) {
-      throw new Error("가계앱 보유 내보내기 파일(스키마 1)이 필요합니다.");
+      throw new Error("가계앱 보유 내보내기 파일(스키마 1 또는 2)이 필요합니다.");
     }
     const indexed = new Map();
     for (const row of file.accounts) {
@@ -52,23 +53,38 @@ const HouseholdImport = (() => {
     return indexed;
   }
 
-  function readHoldings(source) {
-    if (!Array.isArray(source.holdings) || !Array.isArray(source.dividends) ||
-        (source.예수금 !== null && !isAmount(source.예수금))) throw new Error("보유 종목·배당·예수금 항목을 확인해주세요.");
+  function readCashWon(source, version) {
+    if (version === 1) {
+      const cash = source.예수금 ?? null;
+      if (cash !== null && !isAmount(cash)) throw new Error("원화 예수금을 확인해주세요.");
+      return cash;
+    }
+    const balances = source.예수금통화별 ?? null;
+    if (balances === null) return null;
+    if (!isObject(balances)) throw new Error("통화별 예수금 항목을 확인해주세요.");
+    const cash = balances.KRW ?? null;
+    if (cash !== null && (!Number.isSafeInteger(cash) || cash < 0)) throw new Error("원화 예수금을 확인해주세요.");
+    return cash;
+  }
+
+  function readHoldings(source, version) {
+    if (!Array.isArray(source.holdings) || !Array.isArray(source.dividends)) throw new Error("보유 종목·배당 항목을 확인해주세요.");
     const positions = new Map();
     for (const row of source.holdings) {
       if (!isObject(row) || !isText(row.통화)) throw new Error("종목 통화 정보가 올바르지 않습니다.");
-      if (row.통화 !== "KRW") {
-        if (row.통화 === null) throw new Error("통화가 확인되지 않은 종목이 있습니다.");
+      const currency = row.통화 ?? null;
+      if (currency !== "KRW") {
+        if (currency === null) throw new Error("통화가 확인되지 않은 종목이 있습니다.");
         continue;
       }
-      const code = row.종목코드;
+      const code = row.종목코드 ?? null;
+      const won = (version === 1 ? row.평균매입가 : row.평균매입가원) ?? null;
       if (!isCode(code) || positions.has(code) || !isText(row.종목명) ||
           !Number.isSafeInteger(row.수량) || row.수량 <= 0 ||
-          (row.평균매입가 !== null && !isAmount(row.평균매입가))) {
+          (won !== null && (!isAmount(won) || (version === SCHEMA_VERSION && !Number.isSafeInteger(won))))) {
         throw new Error("국내 종목코드·수량·평균매입가를 확인해주세요.");
       }
-      positions.set(code, row);
+      positions.set(code, { ...row, 종목명: row.종목명 ?? null, 평균매입가원: won });
     }
     return positions;
   }
@@ -80,7 +96,7 @@ const HouseholdImport = (() => {
     return id;
   }
 
-  function replaceDividends(account, source, names, today) {
+  function replaceDividends(account, source, names, today, version) {
     const year = today.slice(0, 4);
     if (account.pastContributions.some(row => String(row.year) === year)) {
       return { contributions: account.contributions, dividends: null };
@@ -92,14 +108,16 @@ const HouseholdImport = (() => {
     const seen = new Set(contributions.map(row => row.sourceId).filter(Boolean));
     let after = 0;
     for (const row of source.dividends) {
-      if (!isObject(row) || typeof row.배당ID !== "string" || !row.배당ID.trim() ||
+      if (!isObject(row)) throw new Error("파일의 배당 내역을 확인해주세요.");
+      const won = (version === 1 ? row.실수령액 : row.실수령액원) ?? null;
+      if (typeof row.배당ID !== "string" || !row.배당ID.trim() ||
           !validDate(row.지급일) || !isText(row.종목코드) ||
-          (row.실수령액 !== null && !isAmount(row.실수령액))) throw new Error("파일의 배당 내역을 확인해주세요.");
+          (won !== null && (!isAmount(won) || (version === SCHEMA_VERSION && !Number.isSafeInteger(won))))) throw new Error("파일의 배당 내역을 확인해주세요.");
       if (!row.지급일.startsWith(year) || row.지급일 > today || seen.has(row.배당ID)) continue;
-      if (row.실수령액 === null) throw new Error("올해 배당 중 실수령액이 비어 있는 기록이 있습니다.");
+      if (won === null) throw new Error("올해 배당 중 실수령액이 비어 있는 기록이 있습니다.");
       seen.add(row.배당ID);
       contributions.push({
-        id: newId(ids, "hh-div-" + row.배당ID), month: row.지급일, amount: row.실수령액,
+        id: newId(ids, "hh-div-" + row.배당ID), month: row.지급일, amount: won,
         type: "배당", sourceId: row.배당ID,
         memo: (typeof row.종목명 === "string" && row.종목명) || names.get(row.종목코드) || row.종목코드 || "종목명 미확인",
       });
@@ -126,7 +144,8 @@ const HouseholdImport = (() => {
       if (account.lastHouseholdImportAt && Date.parse(file.exportedAt) <= Date.parse(account.lastHouseholdImportAt)) {
         throw new Error(account.label + "에 적용한 파일보다 최신 자료가 필요합니다.");
       }
-      const positions = readHoldings(source);
+      const positions = readHoldings(source, file.schemaVersion);
+      const wonCash = readCashWon(source, file.schemaVersion);
       const ids = new Set(account.assets.map(asset => asset.id));
       const names = new Map(account.assets.filter(asset => assetCode(asset)).map(asset => [assetCode(asset), asset.name]));
       positions.forEach((row, code) => { if (row.종목명) names.set(code, row.종목명); });
@@ -145,24 +164,24 @@ const HouseholdImport = (() => {
           const change = { code, name: asset.name, before: asset.quantity, after: quantity };
           (quantity === 0 ? summary.zeroed : summary.changed).push(change);
         }
-        return { ...asset, quantity, price: row?.평균매입가 ?? asset.price };
+        return { ...asset, quantity, price: row?.평균매입가원 ?? asset.price };
       });
       for (const [code, row] of positions) {
         if (localCodes.has(code)) continue;
-        if (row.평균매입가 === null) throw new Error(code + " 신규 종목의 평균매입가를 확인해주세요.");
+        if (row.평균매입가원 === null) throw new Error(code + " 신규 종목의 평균매입가를 확인해주세요.");
         const name = row.종목명 || code;
-        assets.push({ id: newId(ids, "hh-" + code), code, name, quantity: row.수량, price: row.평균매입가,
+        assets.push({ id: newId(ids, "hh-" + code), code, name, quantity: row.수량, price: row.평균매입가원,
           currentPrice: 0, category: "", parkingAsset: false, assetType: "위험자산" });
         summary.added.push({ code, name, after: row.수량 });
       }
       const beforeCash = cashRows.length ? cashValue(cashRows[0]) : 0;
-      summary.cash = { before: beforeCash, after: source.예수금 };
-      if (source.예수금 !== null) {
+      summary.cash = { before: beforeCash, after: wonCash };
+      if (wonCash !== null) {
         const base = cashRows[0] || { id: newId(ids, "hh-cash"), name: "예수금", code: "", category: "현금/단기채", assetType: "안전자산" };
-        const cash = { ...base, parkingAsset: true, quantity: 1, price: source.예수금, currentPrice: source.예수금 };
+        const cash = { ...base, parkingAsset: true, quantity: 1, price: wonCash, currentPrice: wonCash };
         assets = cashRows.length ? assets.map(asset => asset.id === base.id ? cash : asset) : [...assets, cash];
       }
-      const result = replaceDividends(account, source, names, today);
+      const result = replaceDividends(account, source, names, today, file.schemaVersion);
       summary.dividends = result.dividends;
       summary.allZero = positions.size === 0;
       next[key] = { ...account, assets, contributions: result.contributions, availableCash: null, lastHouseholdImportAt: file.exportedAt };
@@ -172,6 +191,6 @@ const HouseholdImport = (() => {
     return { accounts: next, summaries };
   }
 
-  return { MAX_BYTES, DEFAULT_MAPPING, validTimestamp, validateMapping, parse, applyHouseholdImport };
+  return { MAX_BYTES, SCHEMA_VERSION, DEFAULT_MAPPING, validTimestamp, validateMapping, parse, applyHouseholdImport };
 })();
 if (typeof module !== "undefined" && module.exports) module.exports = HouseholdImport;

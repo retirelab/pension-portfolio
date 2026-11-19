@@ -37,3 +37,14 @@ for(let trial=0;trial<2000;trial++){
 const large=allocate([item('A',1e10,1),item('B',1e10,1),item('C',1e10,1e10)],1e9);
 assert(large.orders.length>=2);
 console.log('PASS gap leveling example, small cash, >3 targets, expensive shares, target caps, 2000 randomized cash/fee invariants and large quantities');
+
+const unknown = { id: "unknown", name: "합성 미분류", category: "", quantity: 10, price: 10000, currentPrice: 10000 };
+const blankParking = { ...unknown, id: "unclassified-parking", name: "합성 미분류 파킹", category: "  ", parkingAsset: true };
+const baselinePlan = api.calculateBuyPlan(acc, 4000, 100);
+const reviewedPlan = api.calculateBuyPlan({ ...acc, assets: [...acc.assets, unknown, blankParking] }, 4000, 100);
+assert.deepEqual(reviewedPlan.fullRebalancePlan, baselinePlan.fullRebalancePlan);
+assert.deepEqual(reviewedPlan.buyOrders, baselinePlan.buyOrders);
+assert.deepEqual(reviewedPlan.deviationData, baselinePlan.deviationData);
+assert.equal(reviewedPlan.generatedParkingSellOrders.length, 0);
+assert.equal(reviewedPlan.unclassifiedAssets.length, 2);
+assert.equal(api.calculateBuyPlan({ ...acc, targetPortfolio: [], assets: [unknown] }, 0).unclassifiedAssets[0].id, "unknown");
